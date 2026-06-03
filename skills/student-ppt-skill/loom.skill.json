@@ -1,0 +1,185 @@
+{
+  "schemaVersion": "1.0",
+  "displayName": "学生 PPT 助手",
+  "category": "工具类",
+  "stage": "PPT 生成",
+  "tags": [
+    "官方",
+    "PPT",
+    "学生",
+    "家长",
+    "读书报告",
+    "课程汇报",
+    "论文答辩",
+    "gpt-image-2",
+    "隐私保护"
+  ],
+  "inputTypes": [
+    "题目或资料",
+    "展示场景",
+    "封面信息",
+    "老师要求",
+    "页数/时长",
+    "素材或引用"
+  ],
+  "outputTypes": [
+    "deck.pptx",
+    "outline.md",
+    "speech.md",
+    "qa.md",
+    "image_manifest.json",
+    "qa-check.md"
+  ],
+  "riskLevel": "medium",
+  "requires": {
+    "fileRead": true,
+    "fileWrite": true,
+    "network": true,
+    "shell": true
+  },
+  "examples": [
+    "帮我把《骆驼祥子》读书报告做成 8 页 PPT，初二，展示 5 分钟，要演讲稿。",
+    "我下周要做论文开题答辩，用这份文档生成 12 页 PPT，偏学术风。",
+    "用 gpt-image-2 做几页好看的配图，但不要把学校和姓名发给图片模型。"
+  ],
+  "packageTree": [
+    {
+      "path": "SKILL.md",
+      "type": "instruction",
+      "description": "主触发说明，只保留核心约束；完整阶段流程由 references/workflow.md 控制。",
+      "risk": "none",
+      "autoRun": false,
+      "loadedWhen": "用户请求生成学生 PPT、演讲稿、答辩问题或展示稿时。"
+    },
+    {
+      "path": "loom.skill.json",
+      "type": "metadata",
+      "description": "Loom UI 元数据，包含分类、标签、权限声明、示例和包结构。",
+      "risk": "none",
+      "autoRun": false,
+      "loadedWhen": "Loom 展示 skill 列表和详情页时。"
+    },
+    {
+      "path": "references/",
+      "type": "directory",
+      "description": "按需读取的长参考资料，避免每次触发都占用上下文。",
+      "risk": "none",
+      "autoRun": false,
+      "loadedWhen": "只有生成结构、处理隐私或配置图片 provider 时读取对应文件。"
+    },
+    {
+      "path": "references/workflow.md",
+      "type": "reference",
+      "description": "阶段门控工作流，定义任务路由、brief、模板选择、页面规格、样张、生成和验证的进入/退出条件。",
+      "risk": "none",
+      "autoRun": false,
+      "loadedWhen": "student-ppt-skill 被触发后首先读取，用于控制完整执行流程。"
+    },
+    {
+      "path": "references/student-ppt-patterns.md",
+      "type": "reference",
+      "description": "学生 PPT 场景规范，覆盖读书报告、课程汇报、答辩、小组作业和实验/调研。",
+      "risk": "none",
+      "autoRun": false,
+      "loadedWhen": "需要设计页序、内容结构、讲述线或质量标准时。"
+    },
+    {
+      "path": "references/privacy.md",
+      "type": "reference",
+      "description": "隐私规则，说明 API Key、Base URL、姓名学校、参考图片如何处理。",
+      "risk": "privacy",
+      "autoRun": false,
+      "loadedWhen": "任务包含学生身份信息、学校资料、第三方图片 provider 或参考图片时。"
+    },
+    {
+      "path": "references/image-provider.md",
+      "type": "reference",
+      "description": "gpt-image-2 默认配置和兼容图片 provider 替换方式。",
+      "risk": "network",
+      "autoRun": false,
+      "loadedWhen": "用户需要生成配图、整页图或配置图片模型时。"
+    },
+    {
+      "path": "scripts/",
+      "type": "directory",
+      "description": "本地脚本目录。安装时不会自动执行，只有用户任务明确需要时才由 agent 调用。",
+      "risk": "shell",
+      "autoRun": false,
+      "loadedWhen": "需要稳定生成图片、组装展示稿或做渲染检查时。"
+    },
+    {
+      "path": "scripts/generate-images.mjs",
+      "type": "script",
+      "description": "读取本地 env/config，调用 gpt-image-2 或兼容 provider 生成配图或整页图。",
+      "risk": "network",
+      "autoRun": false,
+      "loadedWhen": "用户选择图片生成，且已配置本地 API Key/Base URL 时。"
+    },
+    {
+      "path": "scripts/build-deck.mjs",
+      "type": "script",
+      "description": "根据模板和页面规格生成 HTML 展示稿，并预留 PPTX 组装入口。",
+      "risk": "file-write",
+      "autoRun": false,
+      "loadedWhen": "需要把页面规格转成可预览展示稿或 PPT 产物时。"
+    },
+    {
+      "path": "scripts/render-check.mjs",
+      "type": "script",
+      "description": "检查生成的 HTML 展示稿是否存在缺页、关键字段缺失和隐私泄露线索。",
+      "risk": "file-read",
+      "autoRun": false,
+      "loadedWhen": "交付前做质量检查时。"
+    },
+    {
+      "path": "assets/templates/",
+      "type": "directory",
+      "description": "模板资源目录，放置学生场景的基础版式和样例页面规格。",
+      "risk": "none",
+      "autoRun": false,
+      "loadedWhen": "生成具体学生 PPT 时复制或读取对应模板。"
+    },
+    {
+      "path": "assets/templates/reading-report/",
+      "type": "template",
+      "description": "读书报告 8 页模板，是当前版本优先打磨的学生场景。",
+      "risk": "none",
+      "autoRun": false,
+      "loadedWhen": "用户请求读书报告、阅读分享、好书推荐或名著导读 PPT 时。"
+    },
+    {
+      "path": "assets/templates/reading-report/template.html",
+      "type": "template",
+      "description": "可直接预览的读书报告 HTML 展示模板，脚本会注入页面规格和封面信息。",
+      "risk": "none",
+      "autoRun": false,
+      "loadedWhen": "需要生成 HTML 展示版或从 HTML 导出 PPT/PDF 时。"
+    },
+    {
+      "path": "assets/templates/reading-report/slide-spec.example.json",
+      "type": "template",
+      "description": "读书报告页面规格示例，展示固定信息、8 页结构、讲稿和图片位。",
+      "risk": "none",
+      "autoRun": false,
+      "loadedWhen": "agent 需要快速生成第一页可用规格或理解模板字段时。"
+    },
+    {
+      "path": "assets/templates/course-report/",
+      "type": "template",
+      "description": "课程汇报模板占位目录，后续放入课程汇报版式和页面规格。",
+      "risk": "none",
+      "autoRun": false,
+      "loadedWhen": "用户请求课程汇报或课堂展示 PPT 时。"
+    },
+    {
+      "path": "assets/templates/defense/",
+      "type": "template",
+      "description": "答辩模板占位目录，后续放入开题、中期、结题和课题答辩版式。",
+      "risk": "none",
+      "autoRun": false,
+      "loadedWhen": "用户请求论文、课题或竞赛答辩 PPT 时。"
+    }
+  ],
+  "installedFrom": "builtin:student-ppt-skill",
+  "installedAt": "2026-06-01T14:22:31.558Z"
+}

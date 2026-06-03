@@ -1,0 +1,226 @@
+/*
+ * base.css — 共享设计 token 契约 + 与主题无关的组件样式
+ * student-ppt-skill 展示轨（1920×1080 固定舞台）。所有颜色/字体走 CSS 变量，
+ * 主题文件（assets/themes/*.css）只覆盖 :root 变量即可换肤。
+ * 设计 token 体系借鉴 html-ppt-skill（MIT），按学生场景精简。
+ */
+
+:root {
+  color-scheme: light;
+
+  /* —— 表面与层次（默认中性，主题会覆盖）—— */
+  --bg: #f4f1ea;
+  --paper: #ffffff;
+  --surface: #f7f5f0;
+  --surface-2: #efece4;
+  --border: rgba(20,20,18,.12);
+  --border-strong: rgba(20,20,18,.24);
+
+  /* —— 文字三级 —— */
+  --text-1: #1d1c1a;
+  --text-2: #54504a;
+  --text-3: #8b867d;
+
+  /* —— 强调色 —— */
+  --accent: #2f6f6d;
+  --accent-2: #b35c2e;
+  --on-accent: #ffffff;
+
+  /* —— 状态色 —— */
+  --good: #2e7d57;
+  --warn: #b8842b;
+  --bad: #b3463b;
+
+  /* —— 圆角 —— */
+  --radius: 18px;
+  --radius-sm: 12px;
+  --radius-lg: 26px;
+
+  /* —— 渐变（仅展示轨）—— */
+  --grad: linear-gradient(135deg, var(--accent), var(--accent-2));
+  --grad-soft: linear-gradient(135deg, rgba(0,0,0,.04), transparent 60%);
+
+  /* —— 字体栈 —— */
+  --font-sans: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
+  --font-serif: "Source Han Serif SC", "Noto Serif SC", "Songti SC", Georgia, serif;
+  --font-mono: "JetBrains Mono", "SF Mono", ui-monospace, monospace;
+  --font-display: var(--font-sans);
+
+  /* —— 排版节奏（1920×1080 画布）—— */
+  --pad-x: 120px;
+  --pad-y: 92px;
+  --title-size: 76px;
+  --cover-title-size: 104px;
+  --subtitle-size: 34px;
+  --kicker-size: 26px;
+  --body-size: 32px;
+  --small-size: 22px;
+}
+
+/* ============================ 通用组件 ============================ */
+
+.slide-pad {
+  position: absolute;
+  inset: 0;
+  padding: var(--pad-y) var(--pad-x);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 40px;
+  z-index: 1;
+}
+
+.kicker {
+  font-size: var(--kicker-size);
+  font-weight: 800;
+  letter-spacing: .04em;
+  color: var(--accent-2);
+}
+
+.slide-title {
+  margin: 10px 0 0;
+  font-family: var(--font-display);
+  font-size: var(--title-size);
+  line-height: 1.1;
+  font-weight: 800;
+  color: var(--text-1);
+  max-width: 1500px;
+}
+
+.slide-subtitle {
+  margin: 18px 0 0;
+  font-size: var(--subtitle-size);
+  line-height: 1.4;
+  color: var(--text-2);
+  max-width: 1300px;
+  font-weight: 400;
+}
+
+.slide-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 28px;
+  font-size: var(--small-size);
+  color: var(--text-3);
+  border-top: 1px solid var(--border);
+  padding-top: 22px;
+}
+.slide-foot .foot-page { font-variant-numeric: tabular-nums; font-weight: 700; color: var(--text-2); }
+
+/* —— 要点列表 —— */
+.points {
+  display: grid;
+  gap: 22px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--body-size);
+  line-height: 1.5;
+  color: var(--text-1);
+  align-content: center;
+}
+.points li {
+  padding: 14px 20px 14px 24px;
+  border-left: 6px solid var(--accent);
+  background: var(--surface);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+/* —— 视觉位 —— */
+.visual {
+  min-height: 0;
+  border-radius: var(--radius);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  padding: 32px;
+  display: grid;
+  align-content: center;
+  gap: 16px;
+  color: var(--text-2);
+  font-size: var(--small-size);
+  line-height: 1.5;
+}
+.visual.placeholder { border-style: dashed; color: var(--text-3); }
+.visual img { width: 100%; height: 100%; object-fit: cover; border-radius: var(--radius-sm); }
+
+/* —— 通用卡片 —— */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 30px 32px;
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+.card .card-title { font-size: 30px; font-weight: 800; color: var(--text-1); margin: 0; }
+.card .card-body { font-size: 26px; line-height: 1.5; color: var(--text-2); margin: 0; }
+.card.accent { background: var(--accent); border-color: transparent; }
+.card.accent .card-title, .card.accent .card-body { color: var(--on-accent); }
+
+/* —— 两栏 —— */
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 34px; align-content: center; }
+.grid-2.lead-right { grid-template-columns: minmax(0,1fr) 480px; }
+.col-label {
+  font-size: var(--small-size); font-weight: 800; letter-spacing: .04em;
+  color: var(--accent); margin: 0 0 4px;
+}
+
+/* —— 时间线 —— */
+.timeline { display: grid; gap: 26px; align-content: center; }
+.tl-step { display: grid; grid-template-columns: 64px 1fr; gap: 24px; align-items: start; }
+.tl-dot {
+  width: 64px; height: 64px; border-radius: 50%;
+  background: var(--accent); color: var(--on-accent);
+  display: grid; place-content: center; font-weight: 800; font-size: 28px;
+}
+.tl-step .tl-title { font-size: 30px; font-weight: 700; margin: 6px 0 4px; color: var(--text-1); }
+.tl-step .tl-body { font-size: 25px; line-height: 1.45; color: var(--text-2); margin: 0; }
+
+/* —— 对比 —— */
+.compare { display: grid; grid-template-columns: 1fr 1fr; gap: 30px; align-content: center; }
+.compare-col { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 28px 30px; display: grid; gap: 14px; align-content: start; }
+.compare-col.good { border-top: 8px solid var(--good); }
+.compare-col.bad { border-top: 8px solid var(--bad); }
+.compare-col h3 { margin: 0; font-size: 30px; color: var(--text-1); }
+.compare-col ul { margin: 0; padding-left: 26px; font-size: 25px; line-height: 1.5; color: var(--text-2); display: grid; gap: 10px; }
+
+/* —— 引用卡 —— */
+.quote { display: grid; gap: 24px; align-content: center; max-width: 1400px; }
+.quote .q-text { font-family: var(--font-serif); font-size: 50px; line-height: 1.35; color: var(--text-1); font-weight: 600; position: relative; }
+.quote .q-text::before { content: "\201C"; font-size: 90px; color: var(--accent); line-height: 0; vertical-align: -0.3em; margin-right: 8px; }
+.quote .q-source { font-size: 26px; color: var(--text-3); }
+.quote .q-read { font-size: 27px; line-height: 1.55; color: var(--text-2); border-left: 6px solid var(--accent); padding-left: 22px; }
+
+/* —— 大数字 —— */
+.stats { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 36px; align-content: center; }
+.stat { display: grid; gap: 8px; justify-items: center; text-align: center; }
+.stat .stat-num { font-size: 110px; font-weight: 800; line-height: 1; color: var(--accent); font-variant-numeric: tabular-nums; }
+.stat .stat-label { font-size: 27px; color: var(--text-2); }
+
+/* —— 人物卡 —— */
+.people { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 28px; align-content: center; }
+.person { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 28px; display: grid; gap: 10px; }
+.person .p-name { font-size: 30px; font-weight: 800; color: var(--text-1); }
+.person .p-role { font-size: 23px; color: var(--accent); font-weight: 700; }
+.person .p-body { font-size: 24px; line-height: 1.45; color: var(--text-2); }
+
+/* —— 反思三角 —— */
+.triad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 26px; align-content: center; }
+.triad .node { background: var(--surface); border: 1px solid var(--border); border-top: 8px solid var(--accent); border-radius: var(--radius); padding: 26px 28px; display: grid; gap: 10px; }
+.triad .node h3 { margin: 0; font-size: 28px; color: var(--text-1); }
+.triad .node p { margin: 0; font-size: 24px; line-height: 1.45; color: var(--text-2); }
+
+/* —— 结构图 —— */
+.flow { display: flex; flex-wrap: wrap; gap: 18px; align-items: center; align-content: center; }
+.flow .node { background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); padding: 22px 26px; font-size: 27px; color: var(--text-1); font-weight: 600; }
+.flow .arrow { color: var(--accent); font-size: 36px; font-weight: 800; }
+
+/* —— 议程/目录 —— */
+.agenda { display: grid; gap: 20px; align-content: center; }
+.agenda-item { display: grid; grid-template-columns: 78px 1fr; gap: 22px; align-items: center; font-size: 32px; color: var(--text-1); }
+.agenda-num { font-family: var(--font-mono); font-size: 30px; font-weight: 700; color: var(--accent); }
+
+/* —— 封面 meta —— */
+.cover-meta { display: flex; flex-wrap: wrap; gap: 12px 30px; font-size: 28px; color: var(--text-2); margin-top: 8px; }
+.cover-meta .sep { color: var(--border-strong); }

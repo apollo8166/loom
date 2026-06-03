@@ -1,0 +1,127 @@
+/* ── Loom CC Design Tokens ─────────────────────────────────────────── */
+/* Warm dark palette — visually identical to abmom-ai-classroom          */
+
+@theme {
+  /* Accent — semantic */
+  --color-accent-primary:   #F59E0B;               /* 琥珀金: 主强调、选中 */
+  --color-accent-ai:        #B88A45;               /* 低饱和琥珀棕: AI 功能 */
+  --color-accent-success:   #9AA36C;               /* 低饱和橄榄: 成功/在线 */
+  --color-accent-danger:    #C96F5D;               /* 低饱和砖红: 破坏性 */
+
+  /* Background layers — warm dark palette */
+  --color-bg-base:          #19120a;               /* 全局底色 (暖棕黑) */
+  --color-bg-nav:           #1a1510;               /* 左侧导航 */
+  --color-bg-surface:       #261e15;               /* 卡片、面板 */
+  --color-bg-surface-high:  #31281f;               /* 激活态背景 */
+  --color-bg-surface-highest: #3c3329;             /* 最高层 (chip、输入框) */
+  --color-bg-input:         #221a12;               /* 输入框背景 */
+  --color-bg-badge:         #1E1400;               /* 徽章背景 */
+
+  /* Theme depth system */
+  --theme-bg-page:           #19120a;
+  --theme-bg-nav:            #1d1710;
+  --theme-bg-panel:          #241c13;
+  --theme-bg-surface:        #2a2118;
+  --theme-bg-raised:         #352b21;
+  --theme-bg-input:          #2f251b;
+  --theme-bg-overlay:        rgba(0, 0, 0, 0.32);
+  --theme-bg-hover:          rgba(255, 255, 255, 0.055);
+  --theme-bg-active:         rgba(245, 158, 11, 0.085);
+  --theme-border:            rgba(255, 255, 255, 0.075);
+  --theme-border-strong:     rgba(255, 255, 255, 0.14);
+  --theme-focus-ring:        0 0 0 3px rgba(245, 158, 11, 0.18);
+  --theme-shadow-panel:      0 14px 36px rgba(0, 0, 0, 0.20);
+  --theme-shadow-soft:       0 8px 22px rgba(0, 0, 0, 0.14);
+  --theme-shadow-popover:    0 24px 70px rgba(0, 0, 0, 0.34);
+  --theme-chat-output-bg:    linear-gradient(180deg, rgba(0, 0, 0, 0.055), transparent 22%), var(--theme-bg-page);
+  --theme-header-bg:         linear-gradient(135deg, rgba(29, 23, 16, 0.97), rgba(20, 15, 10, 0.95));
+  --theme-header-glow:       linear-gradient(90deg, transparent 8%, rgba(245, 158, 11, 0.16) 30%, rgba(245, 158, 11, 0.06) 58%, transparent 92%);
+  --theme-app-glow:
+    radial-gradient(circle at 18% 0%, rgba(245, 158, 11, 0.055), transparent 30%),
+    radial-gradient(circle at 90% 12%, rgba(120, 83, 45, 0.045), transparent 26%);
+
+  /* Shell layout */
+  --shell-gap:               12px;
+  --shell-outer-gap:         12px;
+  --shell-radius-lg:         14px;
+  --shell-radius-md:         10px;
+  --shell-panel-bg:          color-mix(in srgb, var(--theme-bg-panel) 96%, transparent);
+  --shell-panel-bg-muted:    color-mix(in srgb, var(--theme-bg-nav) 96%, transparent);
+  --shell-panel-border:      var(--theme-border);
+  --shell-panel-shadow:      var(--theme-shadow-panel);
+  --shell-panel-shadow-soft: var(--theme-shadow-soft);
+
+  /* Border */
+  --color-border-subtle:    rgba(255, 255, 255, 0.08);   /* 细边框、分割线 */
+  --color-border-strong:    rgba(255, 255, 255, 0.16);   /* 强调边框 */
+
+  /* Text */
+  --color-text-primary:     #f0e0d1;               /* 主文字 (暖奶白) */
+  --color-text-secondary:   #d8c3ad;               /* 次要文字 */
+  --color-text-muted:       #a08e7a;               /* 弱化 / 占位符 */
+  --color-text-disabled:    #534434;               /* 禁用状态 */
+
+  /* Font families */
+  --font-sans:    -apple-system, BlinkMacSystemFont, 'Helvetica Neue', 'PingFang SC', 'Hiragino Sans GB', sans-serif;
+  --font-display: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', 'PingFang SC', 'Hiragino Sans GB', sans-serif;
+  --font-mono:    'SF Mono', 'Fira Code', 'Cascadia Code', Consolas, 'Liberation Mono', monospace;
+}
+
+/* ── Light Mode Token Overrides ──────────────────────────────────── */
+[data-theme="light"] {
+  /* Backgrounds — clean tech white palette */
+  --color-bg-base:             #F7F9FB;
+  --color-bg-nav:              #FFFFFF;
+  --color-bg-surface:          #FFFFFF;
+  --color-bg-surface-high:     #F8FAFC;
+  --color-bg-surface-highest:  #EEF2F7;
+  --color-bg-input:            #FBFCFE;
+  --color-bg-badge:            #FFF7E8;
+
+  /* Theme depth system */
+  --theme-bg-page:              #F7F9FB;
+  --theme-bg-nav:               #FFFFFF;
+  --theme-bg-panel:             #FFFFFF;
+  --theme-bg-surface:           #FBFCFE;
+  --theme-bg-raised:            #FFFFFF;
+  --theme-bg-input:             #FFFFFF;
+  --theme-bg-overlay:           rgba(15, 23, 42, 0.14);
+  --theme-bg-hover:             rgba(15, 23, 42, 0.045);
+  --theme-bg-active:            rgba(217, 119, 6, 0.075);
+  --theme-border:               rgba(15, 23, 42, 0.075);
+  --theme-border-strong:        rgba(15, 23, 42, 0.13);
+  --theme-focus-ring:           0 0 0 3px rgba(217, 119, 6, 0.16);
+  --theme-shadow-panel:         0 12px 32px rgba(15, 23, 42, 0.07);
+  --theme-shadow-soft:          0 6px 18px rgba(15, 23, 42, 0.05);
+  --theme-shadow-popover:       0 24px 70px rgba(15, 23, 42, 0.18);
+  --theme-chat-output-bg:       linear-gradient(180deg, rgba(15, 23, 42, 0.012), transparent 22%), #FFFFFF;
+  --theme-header-bg:            linear-gradient(180deg, rgba(255, 255, 255, 0.97), rgba(248, 250, 252, 0.95));
+  --theme-header-glow:          linear-gradient(90deg, transparent 8%, rgba(217, 119, 6, 0.10) 30%, rgba(148, 163, 184, 0.08) 58%, transparent 92%);
+  --theme-app-glow:
+    radial-gradient(circle at 18% 0%, rgba(217, 119, 6, 0.025), transparent 30%),
+    radial-gradient(circle at 90% 12%, rgba(59, 130, 246, 0.025), transparent 26%);
+
+  /* Shell layout */
+  --shell-panel-bg:             color-mix(in srgb, var(--theme-bg-panel) 94%, transparent);
+  --shell-panel-bg-muted:       color-mix(in srgb, var(--theme-bg-nav) 94%, transparent);
+  --shell-panel-border:         var(--theme-border);
+  --shell-panel-shadow:         var(--theme-shadow-panel);
+  --shell-panel-shadow-soft:    var(--theme-shadow-soft);
+
+  /* Borders */
+  --color-border-subtle:       rgba(15, 23, 42, 0.075);
+  --color-border-strong:       rgba(15, 23, 42, 0.13);
+
+  /* Text — slate scale */
+  --color-text-primary:        #0F172A;
+  --color-text-secondary:      #334155;
+  --color-text-muted:          #64748B;
+  --color-text-disabled:       #CBD5E1;
+
+  /* Accent — amber slightly deepened for light mode contrast */
+  --color-accent-primary:      #D97706;
+}
+
+[data-theme="light"] ::-webkit-scrollbar-thumb {
+  background-color: rgba(0, 0, 0, 0.15);
+}

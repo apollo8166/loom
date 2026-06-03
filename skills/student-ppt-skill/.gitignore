@@ -1,0 +1,13 @@
+# 导出轨可选依赖（按需 npm install，不入库）
+node_modules/
+package-lock.json
+# 运行产物
+qa-check.json
+pptx-validate.json
+student-ppt.html
+pptx-slides/
+generated-images/
+deck.pptx
+# 本地图片 provider 配置（可能含密钥）
+.student-ppt.local.json
+.DS_Store

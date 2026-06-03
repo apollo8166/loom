@@ -1,0 +1,25 @@
+/* kid-friendly — 低龄学生 · 高对比 + 圆角 + 活泼（不 emoji 刷屏）*/
+:root {
+  --bg: #ffe9c9;
+  --paper: #fffdf8;
+  --surface: #fff2dc;
+  --surface-2: #ffe7c2;
+  --border: rgba(60,40,16,.14);
+  --border-strong: rgba(60,40,16,.28);
+  --text-1: #2a2014;
+  --text-2: #5b4a34;
+  --text-3: #9a866a;
+  --accent: #f0683a;
+  --accent-2: #2bb0c9;
+  --on-accent: #ffffff;
+  --radius: 26px; --radius-sm: 18px; --radius-lg: 34px;
+  --font-display: var(--font-sans);
+  --title-size: 80px;
+  --cover-title-size: 108px;
+  --body-size: 34px;
+}
+.slide { background:
+  radial-gradient(circle at 88% 14%, rgba(240,104,58,.16), transparent 30%),
+  radial-gradient(circle at 10% 90%, rgba(43,176,201,.16), transparent 28%),
+  var(--paper); }
+.points li { border-left-width: 8px; }

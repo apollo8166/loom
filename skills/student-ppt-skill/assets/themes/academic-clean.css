@@ -1,0 +1,21 @@
+/* academic-clean — 论文/课题答辩 · 克制学术风 */
+:root {
+  --bg: #e7eaef;
+  --paper: #ffffff;
+  --surface: #f4f6f9;
+  --surface-2: #e9eef4;
+  --border: rgba(18,38,58,.12);
+  --border-strong: rgba(18,38,58,.26);
+  --text-1: #16202e;
+  --text-2: #475264;
+  --text-3: #8893a2;
+  --accent: #1f4e79;
+  --accent-2: #3a6ea5;
+  --on-accent: #ffffff;
+  --radius: 12px; --radius-sm: 8px; --radius-lg: 16px;
+  --font-display: var(--font-sans);
+  --kicker-size: 24px;
+}
+.slide { background:
+  linear-gradient(180deg, rgba(31,78,121,.05), transparent 18%),
+  var(--paper); }

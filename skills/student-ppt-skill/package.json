@@ -1,0 +1,18 @@
+{
+  "name": "student-ppt-skill",
+  "version": "1.0.0",
+  "private": true,
+  "description": "学生/家长 PPT skill。展示轨（HTML）零依赖；导出轨（可编辑 PPTX）需下列可选依赖。注意：不要加 type:module，否则 CommonJS 的 html2pptx.js 会被当 ESM 而报 require is not defined。",
+  "scripts": {
+    "deck": "node scripts/build-deck.mjs",
+    "pptx-html": "node scripts/build-pptx-html.mjs",
+    "pptx": "node scripts/export-pptx.mjs",
+    "check": "node scripts/render-check.mjs",
+    "validate-pptx": "node scripts/validate-pptx-html.mjs"
+  },
+  "optionalDependencies": {
+    "pptxgenjs": "^3.12.0",
+    "playwright": "^1.44.0",
+    "sharp": "^0.33.0"
+  }
+}

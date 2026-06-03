@@ -1,0 +1,141 @@
+/*
+ * deck-stage.css — 固定 1920×1080 舞台 + 等比缩放 + 单页切换 + 演讲者/总览 chrome + 打印
+ * 固定舞台范式借鉴 frontend-slides（MIT）。
+ */
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  background: var(--bg);
+  color: var(--text-1);
+  font-family: var(--font-sans);
+  overflow: hidden;
+}
+
+.deck-viewport {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+
+.deck-stage {
+  position: relative;
+  width: 1920px;
+  height: 1080px;
+  transform-origin: center center;
+  flex: 0 0 auto;
+}
+
+.slide {
+  position: absolute;
+  inset: 0;
+  width: 1920px;
+  height: 1080px;
+  background: var(--paper);
+  overflow: hidden;
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity .45s ease;
+}
+.slide.is-active { visibility: visible; opacity: 1; z-index: 2; }
+
+.slide::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 1px solid var(--border);
+  pointer-events: none;
+  z-index: 3;
+}
+
+/* 封面页 */
+.slide[data-layout="cover"] .slide-body { align-content: center; justify-items: start; gap: 20px; }
+.slide[data-layout="cover"] .slide-title { font-size: var(--cover-title-size); max-width: 1600px; }
+
+/* —— 底部导航提示 + 进度 —— */
+.deck-hint {
+  position: fixed;
+  right: 22px;
+  bottom: 16px;
+  font-size: 13px;
+  color: var(--text-3);
+  background: rgba(255,255,255,.7);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 6px 14px;
+  z-index: 50;
+  font-family: var(--font-sans);
+  opacity: .85;
+  user-select: none;
+}
+.deck-progress {
+  position: fixed;
+  left: 0; bottom: 0; height: 4px;
+  background: var(--accent);
+  z-index: 50;
+  transition: width .3s ease;
+}
+
+/* 演讲者备注：屏幕上永远不显示 */
+.notes { display: none !important; }
+
+/* —— 总览（O 键）—— */
+.overview {
+  position: fixed; inset: 0; z-index: 100;
+  background: rgba(20,20,18,.92);
+  display: none;
+  padding: 40px;
+  overflow: auto;
+}
+.overview.open { display: block; }
+.overview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: 22px;
+  max-width: 1600px;
+  margin: 0 auto;
+}
+.ov-cell {
+  aspect-ratio: 16/9;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 3px solid transparent;
+  cursor: pointer;
+  background: #000;
+  position: relative;
+}
+.ov-cell.current { border-color: var(--accent); }
+.ov-cell iframe { width: 1920px; height: 1080px; border: 0; transform-origin: top left; pointer-events: none; }
+.ov-cell .ov-num {
+  position: absolute; left: 8px; top: 6px; z-index: 2;
+  font-size: 13px; color: #fff; background: rgba(0,0,0,.55);
+  border-radius: 6px; padding: 2px 8px; font-family: var(--font-mono);
+}
+
+/* —— 预览模式 —— */
+body.preview-mode { background: var(--paper); }
+body.preview-mode .deck-hint,
+body.preview-mode .deck-progress { display: none; }
+body.preview-mode .slide::after { display: none; }
+
+/* —— 打印 —— */
+@media print {
+  @page { size: 1920px 1080px; margin: 0; }
+  body { overflow: visible; background: #fff; }
+  .deck-viewport { position: static; display: block; overflow: visible; }
+  .deck-stage { transform: none !important; width: 1920px; height: auto; }
+  .slide {
+    position: relative; inset: auto;
+    visibility: visible; opacity: 1;
+    page-break-after: always; break-after: page;
+  }
+  .slide::after { display: none; }
+  .deck-hint, .deck-progress, .overview { display: none !important; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .slide { transition: none; }
+  .deck-progress { transition: none; }
+}

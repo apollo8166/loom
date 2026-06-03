@@ -1,0 +1,59 @@
+import { NextRequest, NextResponse } from 'next/server'
+import { getDb } from '@/shared/db/db'
+import { clearSessionAllowances } from '@/shared/runtime/sdk/permission-bridge'
+
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+
+/**
+ * POST /api/conversations/:id/clear — clear the latest active session (compat shell)
+ * Delegates to the same logic as /api/sessions/:id/clear
+ */
+export async function POST(
+  _req: NextRequest,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const { id } = await params
+  const db = getDb()
+
+  // Find the latest active session for this project
+  const session = db.prepare(
+    `SELECT * FROM sessions
+     WHERE project_id = ? AND status = 'active'
+     ORDER BY last_message_at DESC, updated_at DESC
+     LIMIT 1`
+  ).get(id) as {
+    id: string; runtime_session_id: string | null; context_version: number
+  } | undefined
+
+  if (!session) {
+    return NextResponse.json({ error: 'No active session found for this project' }, { status: 404 })
+  }
+
+  const newRuntimeSessionId = crypto.randomUUID()
+  const newContextVersion = session.context_version + 1
+  const boundaryId = crypto.randomUUID()
+
+  db.transaction(() => {
+    db.prepare(
+      `INSERT INTO session_boundaries (id, session_id, boundary_type, from_runtime_session_id, to_runtime_session_id)
+       VALUES (?, ?, 'clear', ?, ?)`
+    ).run(boundaryId, session.id, session.runtime_session_id, newRuntimeSessionId)
+
+    db.prepare(
+      `UPDATE sessions SET
+         context_version = ?,
+         runtime_session_id = ?,
+         updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+       WHERE id = ?`
+    ).run(newContextVersion, newRuntimeSessionId, session.id)
+  })()
+
+  if (session.runtime_session_id) {
+    clearSessionAllowances(session.runtime_session_id)
+  }
+  clearSessionAllowances(session.id)
+
+  const updated = db.prepare('SELECT * FROM sessions WHERE id = ?').get(session.id)
+  return NextResponse.json({ session: updated })
+}

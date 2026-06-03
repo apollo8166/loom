@@ -1,0 +1,38 @@
+.DS_Store
+Thumbs.db
+
+# Dependencies
+node_modules/
+loom-cc-client/node_modules/
+
+# Environment and local secrets
+.env
+.env.*
+!.env.example
+loom-cc-client/.env
+loom-cc-client/.env.*
+!loom-cc-client/.env.example
+
+# Next.js / Electron build output
+loom-cc-client/.next/
+loom-cc-client/out/
+loom-cc-client/dist/
+loom-cc-client/dist-electron/
+loom-cc-client/release/
+loom-cc-client/build/icon.iconset/
+loom-cc-client/build/node-runtime/
+loom-cc-client/build/claude-cli/
+
+# Logs and caches
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.turbo/
+coverage/
+
+# Local app data
+*.db
+*.sqlite
+*.sqlite3

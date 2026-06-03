@@ -1,0 +1,21 @@
+/* reading-warm — 读书报告 · 温和书籍质感 */
+:root {
+  --bg: #d8d0c3;
+  --paper: #f8f2e7;
+  --surface: #fffaf1;
+  --surface-2: #f0e8d8;
+  --border: rgba(32,32,29,.14);
+  --border-strong: rgba(32,32,29,.26);
+  --text-1: #20201d;
+  --text-2: #6e6a62;
+  --text-3: #948e83;
+  --accent: #2f6f6d;
+  --accent-2: #b35c2e;
+  --on-accent: #ffffff;
+  --radius: 18px; --radius-sm: 12px; --radius-lg: 24px;
+  --font-display: var(--font-serif);
+}
+.slide { background:
+  linear-gradient(135deg, rgba(47,111,109,.10), transparent 34%),
+  radial-gradient(circle at 86% 16%, rgba(179,92,46,.14), transparent 26%),
+  var(--paper); }

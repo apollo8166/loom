@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>学生读书报告</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #20201d;
+      --muted: #6e6a62;
+      --paper: #f8f2e7;
+      --panel: #fffaf1;
+      --accent: #2f6f6d;
+      --accent-2: #b35c2e;
+      --line: rgba(32, 32, 29, .14);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: #d8d0c3;
+      color: var(--ink);
+      font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    }
+    .deck {
+      width: min(100vw, 1280px);
+      margin: 0 auto;
+      padding: 24px;
+      display: grid;
+      gap: 24px;
+    }
+    .slide {
+      aspect-ratio: 16 / 9;
+      min-height: 0;
+      padding: 56px 64px;
+      border-radius: 18px;
+      background:
+        linear-gradient(135deg, rgba(47,111,109,.12), transparent 34%),
+        radial-gradient(circle at 86% 18%, rgba(179,92,46,.16), transparent 26%),
+        var(--paper);
+      box-shadow: 0 24px 60px rgba(32, 32, 29, .22);
+      position: relative;
+      overflow: hidden;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 28px;
+    }
+    .slide::after {
+      content: "";
+      position: absolute;
+      inset: 20px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      pointer-events: none;
+    }
+    .kicker {
+      font-size: 17px;
+      letter-spacing: 0;
+      color: var(--accent-2);
+      font-weight: 700;
+    }
+    h1, h2 {
+      margin: 0;
+      letter-spacing: 0;
+      line-height: 1.12;
+    }
+    h1 { font-size: 58px; max-width: 860px; }
+    h2 { font-size: 42px; max-width: 920px; }
+    .content {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 330px;
+      gap: 34px;
+      align-items: center;
+    }
+    .cover .content { grid-template-columns: minmax(0, 1fr); align-items: end; }
+    .points {
+      display: grid;
+      gap: 16px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      font-size: 25px;
+      line-height: 1.55;
+    }
+    .points li {
+      padding-left: 18px;
+      border-left: 5px solid var(--accent);
+      background: rgba(255, 250, 241, .62);
+      border-radius: 0 10px 10px 0;
+    }
+    .visual {
+      min-height: 310px;
+      border-radius: 16px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      padding: 24px;
+      display: grid;
+      align-content: center;
+      gap: 14px;
+      color: var(--muted);
+      font-size: 20px;
+      line-height: 1.45;
+    }
+    .footer {
+      display: flex;
+      justify-content: space-between;
+      gap: 24px;
+      font-size: 16px;
+      color: var(--muted);
+      position: relative;
+      z-index: 1;
+    }
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 18px;
+      font-size: 20px;
+      color: var(--muted);
+    }
+    .notes {
+      margin: 10px 0 0;
+      font-size: 13px;
+      color: #5d574f;
+    }
+    @media print {
+      body { background: white; }
+      .deck { width: 100%; padding: 0; gap: 0; }
+      .slide { border-radius: 0; box-shadow: none; page-break-after: always; }
+    }
+  </style>
+</head>
+<body>
+  <main class="deck" id="deck"></main>
+  <script>
+    const spec = __SLIDE_SPEC_JSON__;
+    const deck = document.getElementById('deck');
+    const meta = spec.meta || {};
+    const slides = spec.slides || [];
+
+    for (const slide of slides) {
+      const section = document.createElement('section');
+      section.className = 'slide' + (slide.page === 1 ? ' cover' : '');
+      const title = slide.action_title || slide.title || '待补充标题';
+      const points = slide.content || [];
+      section.innerHTML = `
+        <header>
+          <div class="kicker">${escapeHtml(slide.kicker || spec.type || '读书报告')}</div>
+          ${slide.page === 1 ? `<h1>${escapeHtml(title)}</h1>` : `<h2>${escapeHtml(title)}</h2>`}
+        </header>
+        <div class="content">
+          <ul class="points">${points.map(point => `<li>${escapeHtml(point)}</li>`).join('')}</ul>
+          ${slide.page === 1 ? '' : `<aside class="visual">${escapeHtml(slide.visual || '视觉位：结构图 / 引用卡 / 时间线')}</aside>`}
+        </div>
+        <footer class="footer">
+          <span>${escapeHtml([meta.studentName, meta.grade, meta.className].filter(Boolean).join(' · '))}</span>
+          <span>${escapeHtml([meta.course, meta.teacherName, meta.date].filter(Boolean).join(' · '))}</span>
+          <span>${String(slide.page).padStart(2, '0')}</span>
+        </footer>
+      `;
+      deck.appendChild(section);
+    }
+
+    function escapeHtml(value) {
+      return String(value || '').replace(/[&<>"']/g, char => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;'
+      }[char]));
+    }
+  </script>
+</body>
+</html>

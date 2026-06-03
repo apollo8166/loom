@@ -1,0 +1,27 @@
+/* competition-bold — 学生比赛/路演 · 暗底 + 统治色 + 锐利标题 */
+:root {
+  color-scheme: dark;
+  --bg: #0c0e12;
+  --paper: #14161b;
+  --surface: #1e222a;
+  --surface-2: #262b34;
+  --border: rgba(255,255,255,.14);
+  --border-strong: rgba(255,255,255,.30);
+  --text-1: #f5f7fb;
+  --text-2: #b9c0cc;
+  --text-3: #7c8595;
+  --accent: #ffcc00;
+  --accent-2: #ff4d6d;
+  --on-accent: #14161b;
+  --radius: 8px; --radius-sm: 6px; --radius-lg: 12px;
+  --font-display: var(--font-sans);
+  --title-size: 92px;
+  --cover-title-size: 124px;
+  --kicker-size: 24px;
+}
+.slide { background:
+  linear-gradient(135deg, rgba(255,204,0,.10), transparent 30%),
+  radial-gradient(circle at 88% 84%, rgba(255,77,109,.14), transparent 30%),
+  var(--paper); }
+.slide-title { letter-spacing: -.01em; }
+.points li { background: var(--surface); }

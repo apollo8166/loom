@@ -1,0 +1,17 @@
+/*
+ * pptx-base.css — 导出轨每张独立 HTML 的基样式（960×540pt = 1280×720px，配 LAYOUT_WIDE）。
+ * 由 build-pptx-html.mjs 内联进每个 pptx-slides/NN.html；__PAPER__ 占位为主题纸色。
+ * 严守 4 条硬约束：纯色（无渐变）、文字只在 p/h*、背景/边框只在 div、图片用 <img>。
+ */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  width: 1280px;
+  height: 720px;
+  position: relative;
+  overflow: hidden;
+  background: __PAPER__;
+  font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+}
+p, h1, h2, h3, h4, h5, h6 { font-weight: 400; line-height: 1.2; }
+ul { list-style: disc; }
+li { line-height: 1.45; }

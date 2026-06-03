@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>__DECK_TITLE__</title>
+  <style>
+/* __BASE_CSS__ */
+/* __STAGE_CSS__ */
+/* __THEME_CSS__ */
+  </style>
+</head>
+<body>
+  <div class="deck-viewport"><div class="deck-stage" id="stage"></div></div>
+  <div class="deck-progress"></div>
+  <div class="deck-hint">← → 翻页 · O 总览 · S 演讲者 · F 全屏</div>
+
+  <script>var SPEC = __SLIDE_SPEC_JSON__;</script>
+  <script>
+  /* ===== 布局渲染器：slide-spec → 固定舞台单页（XSS 安全） ===== */
+  (function () {
+    var stage = document.getElementById('stage');
+    var meta = SPEC.meta || {};
+    var slides = SPEC.slides || [];
+    var deckType = SPEC.type || '学生展示';
+
+    function esc(v) {
+      return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[c];
+      });
+    }
+    function clean(v) {
+      var s = String(v == null ? '' : v).trim();
+      if (!s || /^待补(充)?$/.test(s)) return '';
+      return s;
+    }
+    function joinMeta(arr) {
+      return arr.map(clean).filter(Boolean).map(esc).join(' <span class="sep">·</span> ');
+    }
+    function points(arr) {
+      return (arr || []).map(function (p) { return '<li>' + esc(p) + '</li>'; }).join('');
+    }
+    function visualAside(s) {
+      if (s.image) return '<aside class="visual"><img src="' + esc(s.image) + '" alt="' + esc(s.visual || '配图') + '" /></aside>';
+      var txt = clean(s.visual) || '视觉位：结构图 / 引用卡 / 时间线';
+      return '<aside class="visual placeholder">' + esc(txt) + '</aside>';
+    }
+
+    function inferLayout(s) {
+      if (s.layout) return s.layout;
+      if (s.page === 1) return 'cover';
+      if (s.quote) return 'quote';
+      return 'claim-bullets';
+    }
+
+    var BODY = {
+      cover: function (s) {
+        var lines = (s.content || []).slice(0, 2).map(function (p) { return '<p class="slide-subtitle" style="margin-top:6px">' + esc(p) + '</p>'; }).join('');
+        var metaLine = joinMeta([meta.studentName || meta.teamName, meta.school, meta.grade, meta.className]);
+        var metaLine2 = joinMeta([meta.course, meta.teacherName, meta.date]);
+        return '<div class="slide-body">' +
+          '<h1 class="slide-title">' + esc(s.action_title || s.title || meta.workTitle || deckType) + '</h1>' +
+          lines +
+          (metaLine ? '<div class="cover-meta">' + metaLine + '</div>' : '') +
+          (metaLine2 ? '<div class="cover-meta">' + metaLine2 + '</div>' : '') +
+          '</div>';
+      },
+      'claim-bullets': function (s) {
+        return '<div class="slide-body grid-2 lead-right"><ul class="points">' + points(s.content) + '</ul>' + visualAside(s) + '</div>';
+      },
+      'two-column': function (s) {
+        var c = s.columns || {};
+        function col(x) {
+          if (!x) return '<div class="card"></div>';
+          var inner = x.items ? '<ul class="points" style="font-size:26px">' + points(x.items) + '</ul>'
+                              : '<p class="card-body">' + esc(x.body || '') + '</p>';
+          return '<div class="card">' + (x.label ? '<div class="col-label">' + esc(x.label) + '</div>' : '') +
+            (x.title ? '<p class="card-title">' + esc(x.title) + '</p>' : '') + inner + '</div>';
+        }
+        return '<div class="slide-body grid-2">' + col(c.left) + col(c.right) + '</div>';
+      },
+      timeline: function (s) {
+        var items = s.items || (s.content || []).map(function (t, i) { return { title: t }; });
+        var rows = items.map(function (it, i) {
+          return '<div class="tl-step"><div class="tl-dot">' + (it.num || (i + 1)) + '</div><div>' +
+            (it.title ? '<p class="tl-title">' + esc(it.title) + '</p>' : '') +
+            (it.body ? '<p class="tl-body">' + esc(it.body) + '</p>' : '') + '</div></div>';
+        }).join('');
+        return '<div class="slide-body"><div class="timeline">' + rows + '</div></div>';
+      },
+      comparison: function (s) {
+        var c = s.compare || {};
+        function side(x, kind) {
+          if (!x) return '';
+          return '<div class="compare-col ' + (kind || '') + '"><h3>' + esc(x.title || '') + '</h3><ul>' + points(x.items) + '</ul></div>';
+        }
+        return '<div class="slide-body"><div class="compare">' + side(c.left, c.leftKind) + side(c.right, c.rightKind) + '</div></div>';
+      },
+      'pros-cons': function (s) {
+        var c = s.compare || {};
+        var left = c.left || { title: '优点 / 支持', items: s.pros || [] };
+        var right = c.right || { title: '不足 / 风险', items: s.cons || [] };
+        return BODY.comparison({ compare: { left: left, right: right, leftKind: 'good', rightKind: 'bad' } });
+      },
+      'structure-map': function (s) {
+        var nodes = s.flow || s.content || [];
+        var html = nodes.map(function (n, i) {
+          return (i ? '<span class="arrow">→</span>' : '') + '<div class="node">' + esc(n) + '</div>';
+        }).join('');
+        return '<div class="slide-body"><div class="flow">' + html + '</div></div>';
+      },
+      quote: function (s) {
+        var q = s.quote || { text: (s.content || [])[0] || '', source: (s.citations || [])[0] || '', reading: (s.content || [])[1] || '' };
+        return '<div class="slide-body"><div class="quote">' +
+          '<div class="q-text">' + esc(q.text) + '</div>' +
+          (q.source ? '<div class="q-source">— ' + esc(q.source) + '</div>' : '') +
+          (q.reading ? '<div class="q-read">' + esc(q.reading) + '</div>' : '') + '</div></div>';
+      },
+      'stat-highlight': function (s) {
+        var stats = s.stats || [];
+        var html = stats.map(function (st) {
+          return '<div class="stat"><div class="stat-num">' + esc(st.num) + '</div><div class="stat-label">' + esc(st.label) + '</div></div>';
+        }).join('');
+        return '<div class="slide-body"><div class="stats">' + html + '</div>' +
+          (s.content && s.content.length ? '<ul class="points" style="margin-top:40px">' + points(s.content) + '</ul>' : '') + '</div>';
+      },
+      'key-people': function (s) {
+        var people = s.people || [];
+        var html = people.map(function (p) {
+          return '<div class="person"><div class="p-name">' + esc(p.name) + '</div>' +
+            (p.role ? '<div class="p-role">' + esc(p.role) + '</div>' : '') +
+            (p.body ? '<div class="p-body">' + esc(p.body) + '</div>' : '') + '</div>';
+        }).join('');
+        return '<div class="slide-body"><div class="people">' + html + '</div></div>';
+      },
+      reflection: function (s) {
+        var nodes = s.triad || (s.content || []).slice(0, 3).map(function (t) { return { title: t }; });
+        var html = nodes.map(function (n) {
+          return '<div class="node"><h3>' + esc(n.title || '') + '</h3>' + (n.body ? '<p>' + esc(n.body) + '</p>' : '') + '</div>';
+        }).join('');
+        return '<div class="slide-body"><div class="triad">' + html + '</div></div>';
+      },
+      agenda: function (s) {
+        var items = s.items || s.content || [];
+        var html = items.map(function (it, i) {
+          var t = (typeof it === 'string') ? it : (it.title || '');
+          return '<div class="agenda-item"><span class="agenda-num">' + String(i + 1).padStart(2, '0') + '</span><span>' + esc(t) + '</span></div>';
+        }).join('');
+        return '<div class="slide-body"><div class="agenda">' + html + '</div></div>';
+      },
+      summary: function (s) {
+        var q = clean(s.question);
+        return '<div class="slide-body" style="display:grid;grid-template-rows:1fr auto;gap:30px;align-content:center">' +
+          '<ul class="points">' + points(s.content) + '</ul>' +
+          (q ? '<div class="card accent"><p class="card-title">讨论 / Q&amp;A</p><p class="card-body">' + esc(q) + '</p></div>' : '') +
+          '</div>';
+      }
+    };
+    BODY['toc'] = BODY.agenda;
+
+    slides.forEach(function (s) {
+      var layout = inferLayout(s);
+      var section = document.createElement('section');
+      section.className = 'slide';
+      section.setAttribute('data-page', s.page || '');
+      section.setAttribute('data-layout', layout);
+
+      var head = '';
+      if (layout !== 'cover') {
+        head = '<header class="slide-head">' +
+          '<div class="kicker">' + esc(clean(s.kicker) || deckType) + '</div>' +
+          '<h2 class="slide-title">' + esc(s.action_title || s.title || '待补充标题') + '</h2>' +
+          (clean(s.subtitle) ? '<p class="slide-subtitle">' + esc(s.subtitle) + '</p>' : '') +
+          '</header>';
+      }
+      var body = (BODY[layout] || BODY['claim-bullets'])(s);
+
+      var foot = layout === 'cover' ? '' : ('<footer class="slide-foot">' +
+        '<span>' + (joinMeta([meta.studentName || meta.teamName, meta.grade, meta.className]) || '&nbsp;') + '</span>' +
+        '<span>' + joinMeta([meta.course, meta.teacherName, meta.date]) + '</span>' +
+        '<span class="foot-page">' + String(s.page || '').padStart(2, '0') + '</span>' +
+        '</footer>');
+
+      section.innerHTML = '<div class="slide-pad">' + head + body + foot + '</div>' +
+        '<aside class="notes">' + esc(s.notes || '') + '</aside>';
+      stage.appendChild(section);
+    });
+  })();
+  </script>
+  <script>
+/* __RUNTIME_JS__ */
+  </script>
+</body>
+</html>

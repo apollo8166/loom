@@ -1,0 +1,21 @@
+/* campus-fresh — 课程汇报 · 清爽校园风 */
+:root {
+  --bg: #e3efe8;
+  --paper: #ffffff;
+  --surface: #eef7f1;
+  --surface-2: #e1efe7;
+  --border: rgba(18,52,40,.12);
+  --border-strong: rgba(18,52,40,.24);
+  --text-1: #1b2b25;
+  --text-2: #485a52;
+  --text-3: #8aa098;
+  --accent: #14a06a;
+  --accent-2: #ef9f33;
+  --on-accent: #ffffff;
+  --radius: 20px; --radius-sm: 14px; --radius-lg: 28px;
+  --font-display: var(--font-sans);
+}
+.slide { background:
+  radial-gradient(circle at 90% 12%, rgba(20,160,106,.12), transparent 28%),
+  radial-gradient(circle at 6% 92%, rgba(239,159,51,.12), transparent 26%),
+  var(--paper); }

@@ -1,0 +1,101 @@
+{
+  "type": "读书报告",
+  "scene": "reading-report",
+  "theme": "reading-warm",
+  "mode": "mixed",
+  "meta": {
+    "studentName": "待补充",
+    "school": "待补充",
+    "grade": "初二",
+    "className": "待补充",
+    "course": "语文",
+    "teacherName": "待补充",
+    "date": "待补充",
+    "workTitle": "骆驼祥子"
+  },
+  "slides": [
+    {
+      "page": 1, "layout": "cover", "kicker": "读书报告",
+      "action_title": "从祥子的三次起落看一个普通人的困境",
+      "purpose": "建立主题和展示身份信息。",
+      "content": ["《骆驼祥子》阅读分享", "围绕人物命运、社会环境和个人选择展开"],
+      "visual": "书籍质感封面，旧城街巷轮廓，避免真实学生隐私进入图片 prompt。",
+      "notes": "开场说明本次分享聚焦祥子的三次起落，以及这些变化背后的原因。先报上书名和作者，再用一句话点出今天的角度——不是复述故事，而是看一个人怎么被环境一点点改变。",
+      "citations": ["老舍《骆驼祥子》"], "image_request": true, "privacy_level": "student_identity"
+    },
+    {
+      "page": 2, "layout": "claim-bullets",
+      "action_title": "我关注的不是结局，而是希望如何一点点被磨掉",
+      "purpose": "说明阅读问题和选择理由。",
+      "content": ["祥子最初有清晰目标", "每次打击都改变他对生活的理解", "这个变化比情节本身更值得讨论"],
+      "visual": "问题卡片：目标 → 打击 → 变化。",
+      "notes": "解释为什么选择这个角度，而不是只复述故事。**关键词：希望、被磨掉**。可以问大家：一个人努力却一次次失败，是他的问题，还是环境的问题？这就是我想讨论的。",
+      "citations": ["老舍《骆驼祥子》"], "image_request": false, "privacy_level": "none"
+    },
+    {
+      "page": 3, "layout": "two-column",
+      "action_title": "老舍把个体命运放进了城市和时代的压力里",
+      "purpose": "介绍作者和作品背景。",
+      "columns": {
+        "left": { "label": "作者", "title": "老舍", "body": "擅长写旧北京底层劳动者，语言朴素，关注普通人的命运。" },
+        "right": { "label": "背景", "title": "1930 年代旧北京", "items": ["城市底层谋生艰难", "个人努力常被环境吞没", "只保留与理解人物有关的背景"] }
+      },
+      "notes": "提醒不要把背景页做成百科。**只讲跟祥子命运有关的两点**：作者擅长写底层、那个时代普通人很难靠努力翻身。",
+      "citations": ["资料来源待补充"], "image_request": false, "privacy_level": "none"
+    },
+    {
+      "page": 4, "layout": "timeline",
+      "action_title": "三次买车失败构成了祥子命运的主线",
+      "purpose": "梳理内容结构。",
+      "items": [
+        { "num": 1, "title": "第一次：努力换来希望", "body": "省吃俭用买上车，是他最接近理想的时刻。" },
+        { "num": 2, "title": "第二次：积蓄被夺走", "body": "辛苦攒下的钱被敲诈，努力被外力清零。" },
+        { "num": 3, "title": "第三次：被现实彻底压垮", "body": "关系和生活的连续打击让他放弃了挣扎。" }
+      ],
+      "notes": "用时间线讲清结构，**避免逐章复述**。三次买车就是三次'起'和'落'，每次落下去，他就离最初的自己更远一点。",
+      "citations": ["老舍《骆驼祥子》"], "image_request": false, "privacy_level": "none"
+    },
+    {
+      "page": 5, "layout": "claim-bullets",
+      "action_title": "祥子的变化说明：目标感也需要环境支撑",
+      "purpose": "分析关键人物或核心观点。",
+      "content": ["早期祥子相信努力就有回报", "连续挫折一点点削弱了他的选择空间", "个人问题和社会压力交织在一起"],
+      "visual": "人物变化对比：要强的祥子 ↔ 麻木的祥子。",
+      "notes": "把性格变化和环境因素联系起来。**他不是天生堕落**，是一次次失去选择之后才放弃的。这一页是全篇的核心观点。",
+      "citations": ["老舍《骆驼祥子》"], "image_request": true, "privacy_level": "none"
+    },
+    {
+      "page": 6, "layout": "quote",
+      "action_title": "最有冲击力的，是希望还在却已经很脆弱的那一刻",
+      "purpose": "展示片段理解。",
+      "quote": {
+        "text": "（请用户补充一句原文引用）",
+        "source": "老舍《骆驼祥子》· 章节待补充",
+        "reading": "先说明这句话在情节里的位置，再说明它如何体现祥子的变化——这页要有'我自己的解读'。"
+      },
+      "notes": "如果用户提供了原文引用，替换 quote.text。**不要编造原文**，没有就写'引用待补充'。解读部分要讲出自己的感受，而不是抄教辅。",
+      "citations": ["引用待用户补充"], "image_request": false, "privacy_level": "none"
+    },
+    {
+      "page": 7, "layout": "reflection",
+      "action_title": "这本书提醒我：评价一个人不能只看结果",
+      "purpose": "表达个人理解和现实联系。",
+      "triad": [
+        { "title": "个人", "body": "祥子有过要强和努力，失败不只是因为懒。" },
+        { "title": "环境", "body": "时代和处境不断压缩他的选择空间。" },
+        { "title": "选择", "body": "现实中也应警惕'只看结果'的简单归因。" }
+      ],
+      "notes": "这页要像学生自己的理解，**不要写成标准答案**。可以联系自己身边的例子：有时候我们说一个人'不努力'，其实没看到他面对的处境。",
+      "citations": [], "image_request": false, "privacy_level": "none"
+    },
+    {
+      "page": 8, "layout": "summary",
+      "action_title": "讨论祥子，其实是在讨论人如何保住希望",
+      "purpose": "总结并引出讨论。",
+      "content": ["人物命运有清晰的'三起三落'变化线", "环境压力是理解作品的关键", "理解人物，要同时看见个人、环境、选择"],
+      "question": "如果祥子在第二次失去积蓄后得到过一次外部帮助，结局会不会不一样？",
+      "notes": "用一个开放问题结束，**方便课堂互动**。先用一句话收住三个结论，再把问题抛给同学，邀请大家发表看法。",
+      "citations": ["资料来源待补充"], "image_request": false, "privacy_level": "none"
+    }
+  ]
+}

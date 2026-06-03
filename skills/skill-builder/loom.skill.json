@@ -1,0 +1,54 @@
+{
+  "schemaVersion": "1.0",
+  "displayName": "Skill 创建器",
+  "category": "能力创建",
+  "stage": "创建与优化",
+  "tags": [
+    "官方",
+    "创建 Skill",
+    "领域标准",
+    "省 token"
+  ],
+  "inputTypes": [
+    "重复任务",
+    "触发场景",
+    "输入输出",
+    "成功标准"
+  ],
+  "outputTypes": [
+    "SKILL.md",
+    "loom.skill.json",
+    "按需资源目录"
+  ],
+  "riskLevel": "low",
+  "requires": {
+    "network": false,
+    "fileRead": true,
+    "fileWrite": true,
+    "shell": false,
+    "mcp": []
+  },
+  "examples": [
+    "我想创建一个帮我写小红书笔记的 skill，根据产品资料生成标题、正文和标签。",
+    "帮我把团队的代码审查流程沉淀成一个 skill。",
+    "优化这个 skill，让它触发更准确、运行时更省 token。"
+  ],
+  "packageTree": [
+    {
+      "path": "SKILL.md",
+      "type": "instruction",
+      "description": "Skill 创建器主文件，包含需求收集、标准抽取、预览确认和质量自检规则。",
+      "risk": "none",
+      "autoRun": false,
+      "loadedWhen": "用户请求创建、优化或标准化 Skill 时。"
+    },
+    {
+      "path": "loom.skill.json",
+      "type": "metadata",
+      "description": "Loom 展示元数据，用于技能列表、详情页和权限摘要。",
+      "risk": "none",
+      "autoRun": false,
+      "loadedWhen": "Loom 展示 Skill 列表和详情页时。"
+    }
+  ]
+}
