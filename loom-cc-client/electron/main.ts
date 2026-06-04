@@ -3,7 +3,8 @@ import path from 'node:path'
 import os from 'node:os'
 import { createServer } from 'node:net'
 import { spawn, type ChildProcess } from 'node:child_process'
-import { existsSync, readdirSync, statSync, watch, mkdirSync, cpSync, readFileSync, unlinkSync, type FSWatcher } from 'node:fs'
+import { appendFileSync, existsSync, readdirSync, statSync, watch, mkdirSync, cpSync, readFileSync, unlinkSync, type FSWatcher } from 'node:fs'
+import { inspect } from 'node:util'
 
 const isDev = !app.isPackaged
 
@@ -33,6 +34,74 @@ function getDataDir(): string {
   }
   return path.join(os.homedir(), `.${name}`)
 }
+
+let mainLogPath: string | null = null
+
+function formatLogArg(arg: unknown): string {
+  if (arg instanceof Error) return arg.stack || arg.message
+  if (typeof arg === 'string') return arg
+  return inspect(arg, { colors: false, depth: 6, breakLength: Infinity })
+}
+
+function appendMainLog(level: 'log' | 'warn' | 'error', args: unknown[]): void {
+  if (!mainLogPath) return
+  const line = `${new Date().toISOString()} ${level.toUpperCase()} ${args.map(formatLogArg).join(' ')}\n`
+  try {
+    appendFileSync(mainLogPath, line, 'utf8')
+  } catch {
+    // Logging must never break application startup.
+  }
+}
+
+function installMainProcessFileLogging(): void {
+  try {
+    const logsDir = path.join(getDataDir(), 'logs')
+    mkdirSync(logsDir, { recursive: true })
+    mainLogPath = path.join(logsDir, 'main.log')
+    appendMainLog('log', [
+      '--- Loom CC main process starting ---',
+      `pid=${process.pid}`,
+      `packaged=${app.isPackaged}`,
+      `platform=${process.platform}`,
+      `arch=${process.arch}`,
+      `electron=${process.versions.electron}`,
+      `node=${process.version}`,
+    ])
+  } catch {
+    return
+  }
+
+  const original = {
+    log: console.log.bind(console),
+    warn: console.warn.bind(console),
+    error: console.error.bind(console),
+  }
+
+  console.log = (...args: unknown[]) => {
+    appendMainLog('log', args)
+    original.log(...args)
+  }
+  console.warn = (...args: unknown[]) => {
+    appendMainLog('warn', args)
+    original.warn(...args)
+  }
+  console.error = (...args: unknown[]) => {
+    appendMainLog('error', args)
+    original.error(...args)
+  }
+
+  process.on('uncaughtExceptionMonitor', (err) => {
+    console.error('[main] uncaughtException:', err)
+  })
+  process.on('unhandledRejection', (reason) => {
+    console.error('[main] unhandledRejection:', reason)
+    setImmediate(() => {
+      throw reason instanceof Error ? reason : new Error(String(reason))
+    })
+  })
+}
+
+installMainProcessFileLogging()
 
 /**
  * Default workspaces root directory.
@@ -103,6 +172,7 @@ function findNodeBinary(): string {
         console.error('[server] Bundled Node.js not executable:', err)
       }
     }
+    throw new Error(`Bundled Node.js runtime not found or not executable: ${bundled}`)
   }
   return 'node'
 }
@@ -178,6 +248,18 @@ async function startServer(): Promise<number> {
   const serverScript = path.join(cwd, 'server.js')
   const nodeBin = findNodeBinary()
 
+  console.log('[server] Launching embedded service:', {
+    appPath,
+    resourcesDir,
+    standaloneDir,
+    cwd,
+    serverScript,
+    nodeBin,
+    port,
+    dataDir: getDataDir(),
+    workspacesDir: getWorkspacesDir(),
+  })
+
   const home = os.homedir()
   const isWin = process.platform === 'win32'
   const pathSep = isWin ? ';' : ':'
@@ -211,6 +293,14 @@ async function startServer(): Promise<number> {
     },
     cwd,
     stdio: ['ignore', 'pipe', 'pipe'],
+  })
+
+  serverProcess.on('error', (err) => {
+    console.error('[server] failed to start:', err)
+    dialog.showErrorBox(
+      'Loom CC 启动失败',
+      `无法启动内置服务：${err.message}\n\n请确认安装包包含 node-runtime，或重新下载最新安装包。`,
+    )
   })
 
   serverProcess.stdout?.on('data', (data: Buffer) => {
@@ -652,8 +742,8 @@ app.whenReady().then(async () => {
     const msg = err instanceof Error ? err.message : String(err)
     console.error('[server] Failed to start:', msg)
     dialog.showErrorBox(
-      'Loom CC — Startup Failed',
-      `Server could not start.\n\n${msg}\n\nPlease ensure Node.js is installed and try again.`
+      'Loom CC 启动失败',
+      `内置服务无法启动。\n\n${msg}\n\n请重新下载最新安装包；如果你是从源码打包，请先运行对应的 macOS 打包命令以写入 node-runtime。`
     )
     app.quit()
   }

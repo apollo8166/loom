@@ -59,10 +59,12 @@ Provider credentials can also be configured from the app settings UI.
 
 macOS packages for the current baseline are generated under `loom-cc-client/release/`:
 
-- `Loom CC-0.1.0-arm64.dmg` for Apple Silicon.
-- `Loom CC-0.1.0.dmg` for Intel Macs.
+- `loom-cc-v0.1.0-mac-arm64.dmg` for Apple Silicon Macs.
+- `loom-cc-v0.1.0-mac-x64.dmg` for Intel Macs.
 
 These local builds are currently unsigned and not notarized. macOS Gatekeeper may warn on first launch.
+
+Packaged macOS apps bundle a matching Node.js v22 runtime and Claude CLI binary for the target architecture, so users do not need a system `node` install to launch the app. Release artifacts do not include local databases, provider credentials, or user settings; those are created per user under the app data directory after first launch.
 
 ## Documentation
 

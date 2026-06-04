@@ -48,8 +48,10 @@ git push github v0.1.0
 
 ```bash
 gh release create v0.1.0 \
-  "loom-cc-client/release/Loom CC-0.1.0-arm64.dmg" \
-  "loom-cc-client/release/Loom CC-0.1.0.dmg" \
+  "loom-cc-client/release/loom-cc-v0.1.0-mac-arm64.dmg" \
+  "loom-cc-client/release/loom-cc-v0.1.0-mac-arm64.dmg.blockmap" \
+  "loom-cc-client/release/loom-cc-v0.1.0-mac-x64.dmg" \
+  "loom-cc-client/release/loom-cc-v0.1.0-mac-x64.dmg.blockmap" \
   --repo apollo8166/loom \
   --title "Loom v0.1.0" \
   --notes-file docs/releases/v0.1.0.md
@@ -57,9 +59,10 @@ gh release create v0.1.0 \
 
 ## Build Artifacts
 
-Attach desktop build artifacts only after verifying they do not contain secrets or local data.
+Attach desktop build artifacts only after verifying they do not contain secrets, local databases, provider credentials, or user settings.
 
 Current known macOS packaging caveats:
 
 - Unsigned and unnotarized local builds trigger Gatekeeper warnings.
-- If `build/claude-cli/` or `build/node-runtime/` is absent, packaged builds may rely on user-installed runtime tooling.
+- macOS packaging commands prepare and bundle `build/node-runtime/` automatically for the target architecture.
+- macOS packaging commands prepare and bundle `build/claude-cli/` automatically for the target architecture.

@@ -4,6 +4,7 @@ Thumbs.db
 # Dependencies
 node_modules/
 loom-cc-client/node_modules/
+.pnpm-store/
 
 # Environment and local secrets
 .env
@@ -22,6 +23,7 @@ loom-cc-client/release/
 loom-cc-client/build/icon.iconset/
 loom-cc-client/build/node-runtime/
 loom-cc-client/build/claude-cli/
+loom-cc-client/build/claude-cli-cache/
 
 # Logs and caches
 *.log

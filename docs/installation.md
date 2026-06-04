@@ -41,6 +41,8 @@ pnpm build:mac:x64
 pnpm build:win
 ```
 
+The macOS packaging commands automatically prepare and bundle a matching Node.js runtime under `build/node-runtime/`, so packaged apps do not depend on a user-installed `node` binary.
+
 For a full macOS local release:
 
 ```bash

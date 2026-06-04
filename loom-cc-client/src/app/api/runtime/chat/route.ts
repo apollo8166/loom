@@ -10,6 +10,7 @@ import { MessageMapper } from '@/shared/runtime/sdk/message-mapper'
 import type { SseEvent } from '@/shared/runtime/sdk/message-mapper'
 import { createPermissionBridge, createAcceptEditsCanUseTool, cleanupStaleSessionAllowances } from '@/shared/runtime/sdk/permission-bridge'
 import { createAskUserQuestionBridge } from '@/shared/runtime/sdk/ask-user-question-bridge'
+import { ConfirmationDraftStore } from '@/shared/runtime/confirmation-block-store'
 import { buildLoomMemoryContext } from '@/shared/memory/retriever'
 import { extractExplicitMemoryCandidates, isExplicitMemoryReferenceRequest } from '@/shared/memory/extractor'
 import { resolveExplicitMemoryReferenceWithLlm } from '@/shared/memory/auto-extractor'
@@ -144,6 +145,47 @@ async function readSdkContextUsage(params: {
       error: err instanceof Error ? err.message : String(err),
     })
     return null
+  }
+}
+
+function createSdkContextUsageSampler(params: {
+  traceId: string
+  sessionId: string
+  phase: string
+  intervalMs?: number
+}) {
+  let latest: Record<string, unknown> | null = null
+  let lastStartedAt = 0
+  let inFlight: Promise<void> | null = null
+
+  const sample = (q: Query | null, force = false) => {
+    if (!q) return latest
+    const now = Date.now()
+    const intervalMs = params.intervalMs ?? 2500
+    if (!force && (inFlight || now - lastStartedAt < intervalMs)) return latest
+    lastStartedAt = now
+    inFlight = readSdkContextUsage({
+      q,
+      traceId: params.traceId,
+      sessionId: params.sessionId,
+      phase: params.phase,
+    })
+      .then(usage => {
+        if (usage) latest = usage
+      })
+      .finally(() => {
+        inFlight = null
+      })
+    return latest
+  }
+
+  return {
+    sample,
+    flush: async () => {
+      if (inFlight) await inFlight
+      return latest
+    },
+    latest: () => latest,
   }
 }
 
@@ -401,15 +443,29 @@ export async function POST(req: Request) {
   ;(async () => {
     const requestStart = Date.now()
     let mapper = new MessageMapper()
+    const confirmationStore = new ConfirmationDraftStore(db, sessionId, currentContextVersion)
 
     try {
+      const permissionPersistence = {
+        onPermissionRequest: (block: Parameters<typeof confirmationStore.upsertPermissionRequest>[0]) => {
+          confirmationStore.upsertPermissionRequest(block)
+        },
+        onPermissionResolved: (requestId: string, decision: Parameters<typeof confirmationStore.resolvePermission>[1]) => {
+          confirmationStore.resolvePermission(requestId, decision)
+        },
+      }
       const canUseTool =
         permissionMode === 'confirm'
-          ? createPermissionBridge(sessionId, emit as (event: SseEvent) => void)
+          ? createPermissionBridge(sessionId, emit as (event: SseEvent) => void, permissionPersistence)
           : permissionMode === 'accept_edits'
-            ? createAcceptEditsCanUseTool(sessionId, emit as (event: SseEvent) => void)
+            ? createAcceptEditsCanUseTool(sessionId, emit as (event: SseEvent) => void, permissionPersistence)
             : undefined
-      const askUserQuestionHook = createAskUserQuestionBridge(sessionId, emit as (event: SseEvent) => void)
+      const askUserQuestionHook = createAskUserQuestionBridge(sessionId, emit as (event: SseEvent) => void, {
+        onAskUserQuestionRequest: (block) => confirmationStore.upsertAskUserQuestionRequest(block),
+        onAskUserQuestionResolved: (requestId, response) => {
+          confirmationStore.resolveAskUserQuestion(requestId, response)
+        },
+      })
 
       const runtimeSessionId = runtimeProviderChanged ? crypto.randomUUID() : (session.runtime_session_id || sessionId)
       // resumePending: we're starting a fresh AI call for a pre-existing user message
@@ -551,6 +607,11 @@ export async function POST(req: Request) {
       let activeRuntimeSessionId = runtimeSessionId
       let activeQuery: Query | null = null
       let sdkContextUsage: Record<string, unknown> | null = null
+      let sdkContextUsageSampler = createSdkContextUsageSampler({
+        traceId,
+        sessionId,
+        phase: 'stream_turn',
+      })
       const sdkCompactEvents: Record<string, unknown>[] = []
       const captureRuntimeEvent = (event: Record<string, unknown>) => {
         if (event.type !== 'compact_boundary') return
@@ -570,13 +631,13 @@ export async function POST(req: Request) {
         })
       }
       const captureRuntimeMessage = async (msg: Record<string, unknown>) => {
-        if (msg.type !== 'result' || !activeQuery || sdkContextUsage) return
-        sdkContextUsage = await readSdkContextUsage({
-          q: activeQuery,
-          traceId,
-          sessionId,
-          phase: needsFallback ? 'result_fallback_turn' : 'result_turn',
-        })
+        if (!activeQuery) return
+        if (msg.type === 'result') {
+          sdkContextUsage = await sdkContextUsageSampler.flush() ?? sdkContextUsage
+          return
+        }
+        sdkContextUsageSampler.sample(activeQuery)
+        sdkContextUsage = sdkContextUsageSampler.latest() ?? sdkContextUsage
       }
       const q = createLoomQuery({
         prompt: promptForQuery,
@@ -692,6 +753,11 @@ export async function POST(req: Request) {
         })
         mapper = new MessageMapper()
         sdkContextUsage = null
+        sdkContextUsageSampler = createSdkContextUsageSampler({
+          traceId,
+          sessionId,
+          phase: 'stream_fallback_turn',
+        })
         const retryRuntimeSessionId = crypto.randomUUID()
         activeRuntimeSessionId = retryRuntimeSessionId
         const retryQ = createLoomQuery({
@@ -720,14 +786,7 @@ export async function POST(req: Request) {
         ).run(activeRuntimeSessionId, turnProviderId, turnModelId, sessionId)
       }
 
-      if (!sdkContextUsage && activeQuery) {
-        sdkContextUsage = await readSdkContextUsage({
-            q: activeQuery,
-            traceId,
-            sessionId,
-            phase: needsFallback ? 'after_fallback_turn' : 'after_turn',
-          })
-      }
+      sdkContextUsage = await sdkContextUsageSampler.flush() ?? sdkContextUsage
 
       const blocks = mapper.getBlocks()
       const elapsedSeconds = Math.floor((Date.now() - requestStart) / 1000)
@@ -757,13 +816,12 @@ export async function POST(req: Request) {
         ),
       } : null
 
-      const assistantMsgId = crypto.randomUUID()
-      db.prepare(
-        'INSERT INTO messages (id, session_id, context_version, role, content, elapsed_seconds, input_tokens, output_tokens, sdk_context_usage) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
-      ).run(
-        assistantMsgId, sessionId, currentContextVersion, 'assistant', JSON.stringify(storableBlocks),
-        elapsedSeconds, mapper.inputTokens, mapper.outputTokens, sdkContextUsage ? JSON.stringify(sdkContextUsage) : ''
-      )
+      const assistantMsgId = confirmationStore.saveFinal(storableBlocks as Record<string, unknown>[], {
+        elapsedSeconds,
+        inputTokens: mapper.inputTokens,
+        outputTokens: mapper.outputTokens,
+        sdkContextUsage,
+      })
 
       const msgCount = db.prepare(
         'SELECT COUNT(*) as count FROM messages WHERE session_id = ? AND context_version = ?'
@@ -904,12 +962,8 @@ export async function POST(req: Request) {
       })
     } catch (err) {
       const blocks = mapper.getBlocks()
-      if (blocks.length > 0) {
-        const assistantMsgId = crypto.randomUUID()
-        db.prepare(
-          'INSERT INTO messages (id, session_id, context_version, role, content) VALUES (?, ?, ?, ?, ?)'
-        ).run(assistantMsgId, sessionId, currentContextVersion, 'assistant', JSON.stringify(blocks))
-      } else if (userMsgInserted) {
+      const assistantMsgId = confirmationStore.savePartial(blocks)
+      if (!assistantMsgId && userMsgInserted) {
         // Only delete user message if we inserted it (don't delete pre-existing ones)
         db.prepare('DELETE FROM messages WHERE id = ?').run(userMsgId)
       }

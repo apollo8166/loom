@@ -15,6 +15,7 @@ import crypto from 'crypto'
 import type { CanUseTool, PermissionResult, PermissionUpdate } from '@anthropic-ai/claude-agent-sdk'
 import type { SseEvent } from '@/shared/runtime/sdk/message-mapper'
 import { logger } from '@/shared/logging/logger'
+import type { ConfirmationContentBlock } from '@/shared/runtime/confirmation-block-store'
 
 export type PermissionDecision = 'allow' | 'allow_session' | 'deny' | 'timeout'
 
@@ -25,6 +26,13 @@ interface PendingRequest {
   sessionId: string
   createdAt: number
   suggestions?: PermissionUpdate[]
+}
+
+type PermissionRequestBlock = Extract<ConfirmationContentBlock, { type: 'permission_request' }>
+
+interface PermissionBridgePersistence {
+  onPermissionRequest?: (block: PermissionRequestBlock) => void | Promise<void>
+  onPermissionResolved?: (requestId: string, decision: PermissionDecision) => void | Promise<void>
 }
 
 // globalThis ensures state is shared across /api/runtime/chat and /api/runtime/permission route handlers
@@ -48,6 +56,7 @@ const PERMISSION_TIMEOUT_MS = 120_000
 export function createPermissionBridge(
   sessionId: string,
   emit: (event: SseEvent) => void | Promise<void>,
+  persistence?: PermissionBridgePersistence,
 ): CanUseTool {
   return async (
     toolName: string,
@@ -67,15 +76,28 @@ export function createPermissionBridge(
     }
 
     const requestId = crypto.randomUUID()
+    const requestBlock: PermissionRequestBlock = {
+      type: 'permission_request',
+      requestId,
+      toolName,
+      toolInput: input,
+      status: 'pending',
+      toolUseId: options.toolUseID,
+    }
 
     try {
-      await Promise.resolve(emit({
-        type: 'permission_request',
+      await Promise.resolve(persistence?.onPermissionRequest?.(requestBlock))
+    } catch (err) {
+      logger.warn('runtime.permission.persist_request_failed', {
+        sessionId,
         requestId,
         toolName,
-        toolInput: input,
-        toolUseId: options.toolUseID,
-      }))
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+
+    try {
+      await Promise.resolve(emit(requestBlock))
     } catch (err) {
       logger.warn('runtime.permission.emit_failed', {
         sessionId,
@@ -83,10 +105,25 @@ export function createPermissionBridge(
         toolName,
         error: err instanceof Error ? err.message : String(err),
       })
+      try {
+        await Promise.resolve(persistence?.onPermissionResolved?.(requestId, 'deny'))
+      } catch { /* best effort */ }
       return { behavior: 'deny', message: `Permission request failed: SSE connection lost` }
     }
 
     const decision = await waitForDecision(requestId, sessionId, toolName, input, options.suggestions)
+
+    try {
+      await Promise.resolve(persistence?.onPermissionResolved?.(requestId, decision))
+    } catch (err) {
+      logger.warn('runtime.permission.persist_resolution_failed', {
+        sessionId,
+        requestId,
+        toolName,
+        decision,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
 
     try {
       await Promise.resolve(emit({ type: 'permission_resolved', requestId, decision }))
@@ -207,8 +244,9 @@ const ACCEPT_EDITS_AUTO_ALLOW = new Set([
 export function createAcceptEditsCanUseTool(
   sessionId: string,
   emit: (event: SseEvent) => void | Promise<void>,
+  persistence?: PermissionBridgePersistence,
 ): CanUseTool {
-  const bridge = createPermissionBridge(sessionId, emit)
+  const bridge = createPermissionBridge(sessionId, emit, persistence)
 
   return async (
     toolName: string,

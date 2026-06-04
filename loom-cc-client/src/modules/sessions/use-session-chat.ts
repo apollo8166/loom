@@ -1014,7 +1014,7 @@ export function useSessionChat(sessionId: string | null) {
       const res = await fetch('/api/runtime/permission', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ requestId, decision }),
+        body: JSON.stringify({ requestId, decision, sessionId }),
       })
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
@@ -1023,7 +1023,7 @@ export function useSessionChat(sessionId: string | null) {
     } catch (err) {
       console.error('Failed to send permission decision:', err)
     }
-  }, [])
+  }, [sessionId])
 
   const sendAskUserQuestionResponse = useCallback(async (
     requestId: string,
@@ -1035,7 +1035,7 @@ export function useSessionChat(sessionId: string | null) {
       const res = await fetch('/api/runtime/ask-user-question', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ requestId, action, answers, annotations }),
+        body: JSON.stringify({ requestId, action, answers, annotations, sessionId }),
       })
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
@@ -1044,7 +1044,7 @@ export function useSessionChat(sessionId: string | null) {
     } catch (err) {
       console.error('Failed to send AskUserQuestion response:', err)
     }
-  }, [])
+  }, [sessionId])
 
   return {
     groups,

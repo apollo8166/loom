@@ -13,6 +13,10 @@ const SCHEMA_VERSION = 11
 
 export const GLOBAL_CHAT_PROJECT_ID = '__global_chat__'
 
+function shouldMigrateLegacyAbmomDb(): boolean {
+  return process.env.LOOM_MIGRATE_LEGACY_ABMOM === '1'
+}
+
 function applySchema(db: Database.Database) {
   db.pragma('journal_mode = WAL')
   db.pragma('foreign_keys = ON')
@@ -842,8 +846,9 @@ export function getDb(): Database.Database {
   const db = new Database(dbPath)
   applySchema(db)
 
-  // One-time migration from legacy abmom-ai DB
-  if (isNewDb) {
+  // One-time migration from legacy abmom-ai DB. This is opt-in only: release
+  // builds must start with a clean user database and must not import old data.
+  if (isNewDb && shouldMigrateLegacyAbmomDb()) {
     const migrationDone = (db.prepare(
       "SELECT value FROM app_settings WHERE key = 'migration_from_abmom'"
     ).get() as { value: string } | undefined)?.value

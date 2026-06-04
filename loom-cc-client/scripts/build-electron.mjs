@@ -3,7 +3,10 @@ import {
   readdirSync, lstatSync, readlinkSync, rmSync, cpSync,
   readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync,
 } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
+import { createRequire } from 'node:module'
+
+const require = createRequire(import.meta.url)
 
 // Step 1: Build electron main + preload with esbuild
 async function buildElectron() {
@@ -223,15 +226,51 @@ function stripDevPaths(standaloneDir) {
 
 // Step 6: Copy claude CLI binary from SDK platform package into build/claude-cli/
 // electron-builder will pick this up via extraResources and put it in Contents/Resources/claude-cli/
+function findPackageJson(packageName) {
+  try {
+    return require.resolve(`${packageName}/package.json`, { paths: [process.cwd()] })
+  } catch {
+    // pnpm may keep optional platform packages in .pnpm without linking them at
+    // node_modules/@scope/name when they were installed for cross-arch packaging.
+    const pnpmDir = join(process.cwd(), 'node_modules', '.pnpm')
+    if (!existsSync(pnpmDir)) return null
+
+    const escaped = packageName.replace('/', '+')
+    const entry = readdirSync(pnpmDir).find(name => name.startsWith(`${escaped}@`))
+    if (!entry) return null
+
+    const candidate = join(pnpmDir, entry, 'node_modules', ...packageName.split('/'), 'package.json')
+    return existsSync(candidate) ? candidate : null
+  }
+}
+
 function copyClaudeBinary() {
   const platform = process.platform
-  const arch = process.arch
+  const arch = process.env.LOOM_TARGET_ARCH || process.arch
   const pkgSuffix = `claude-agent-sdk-${platform}-${arch}`
+  const packageName = `@anthropic-ai/${pkgSuffix}`
   const binaryName = platform === 'win32' ? 'claude.exe' : 'claude'
-  const srcPath = join(process.cwd(), 'node_modules', '@anthropic-ai', pkgSuffix, binaryName)
+  const cachedSrcPath = join(process.cwd(), 'build', 'claude-cli-cache', `${platform}-${arch}`, binaryName)
+  const packageJsonPath = findPackageJson(packageName)
   const destDir = join(process.cwd(), 'build', 'claude-cli')
   const destPath = join(destDir, binaryName)
 
+  rmSync(destDir, { recursive: true, force: true })
+
+  if (existsSync(cachedSrcPath)) {
+    mkdirSync(destDir, { recursive: true })
+    cpSync(cachedSrcPath, destPath)
+    if (platform !== 'win32') chmodSync(destPath, 0o755)
+    console.log(`✅ Copied claude binary (${platform}-${arch}) from build/claude-cli-cache/`)
+    return
+  }
+
+  if (!packageJsonPath) {
+    console.warn(`⚠️  Claude binary package ${packageName} not found — skipping (claude CLI may need to be installed by user)`)
+    return
+  }
+
+  const srcPath = join(dirname(packageJsonPath), binaryName)
   if (!existsSync(srcPath)) {
     console.warn(`⚠️  Claude binary not found at ${srcPath} — skipping (claude CLI may need to be installed by user)`)
     return

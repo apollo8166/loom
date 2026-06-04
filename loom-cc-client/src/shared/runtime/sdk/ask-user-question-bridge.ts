@@ -2,6 +2,7 @@ import crypto from 'crypto'
 import type { HookCallback, HookJSONOutput } from '@anthropic-ai/claude-agent-sdk'
 import type { SseEvent } from '@/shared/runtime/sdk/message-mapper'
 import { logger } from '@/shared/logging/logger'
+import type { ConfirmationContentBlock } from '@/shared/runtime/confirmation-block-store'
 
 export type AskUserQuestionStatus = 'submit' | 'cancel' | 'timeout'
 
@@ -36,6 +37,13 @@ interface PendingAskUserQuestion {
   cleanup: () => void
 }
 
+type AskUserQuestionBlock = Extract<ConfirmationContentBlock, { type: 'ask_user_question' }>
+
+interface AskUserQuestionPersistence {
+  onAskUserQuestionRequest?: (block: AskUserQuestionBlock) => void | Promise<void>
+  onAskUserQuestionResolved?: (requestId: string, response: AskUserQuestionResponse) => void | Promise<void>
+}
+
 const g = globalThis as unknown as {
   __loom_pendingAskUserQuestions?: Map<string, PendingAskUserQuestion>
 }
@@ -49,6 +57,7 @@ const ASK_USER_QUESTION_TIMEOUT_MS = 30 * 60 * 1000
 export function createAskUserQuestionBridge(
   sessionId: string,
   emit: (event: SseEvent) => void | Promise<void>,
+  persistence?: AskUserQuestionPersistence,
 ): HookCallback {
   return async (input, toolUseId, options): Promise<HookJSONOutput> => {
     if (input.hook_event_name !== 'PreToolUse' || input.tool_name !== 'AskUserQuestion') {
@@ -63,13 +72,29 @@ export function createAskUserQuestionBridge(
 
     const requestId = crypto.randomUUID()
     const effectiveToolUseId = input.tool_use_id || toolUseId
+    const requestBlock: AskUserQuestionBlock = {
+      type: 'ask_user_question',
+      requestId,
+      toolUseId: effectiveToolUseId,
+      questions,
+      status: 'pending',
+    }
+
+    try {
+      await Promise.resolve(persistence?.onAskUserQuestionRequest?.(requestBlock))
+    } catch (err) {
+      logger.warn('runtime.ask_user_question.persist_request_failed', {
+        sessionId,
+        requestId,
+        toolUseId: effectiveToolUseId,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
 
     try {
       await Promise.resolve(emit({
+        ...requestBlock,
         type: 'ask_user_question_request',
-        requestId,
-        toolUseId: effectiveToolUseId,
-        questions,
       }))
     } catch (err) {
       logger.warn('runtime.ask_user_question.emit_failed', {
@@ -78,10 +103,29 @@ export function createAskUserQuestionBridge(
         toolUseId: effectiveToolUseId,
         error: err instanceof Error ? err.message : String(err),
       })
+      try {
+        await Promise.resolve(persistence?.onAskUserQuestionResolved?.(requestId, {
+          action: 'cancel',
+          answers: {},
+          annotations: {},
+        }))
+      } catch { /* best effort */ }
       return denyAskUserQuestion('无法显示桌面选择界面')
     }
 
     const response = await waitForResponse(requestId, sessionId, questions, options.signal)
+
+    try {
+      await Promise.resolve(persistence?.onAskUserQuestionResolved?.(requestId, response))
+    } catch (err) {
+      logger.warn('runtime.ask_user_question.persist_resolution_failed', {
+        sessionId,
+        requestId,
+        toolUseId: effectiveToolUseId,
+        action: response.action,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
 
     try {
       await Promise.resolve(emit({

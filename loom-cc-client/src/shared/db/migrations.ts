@@ -10,7 +10,7 @@ import { logger } from '@/shared/logging/logger'
  *   sessions      → sessions  (conversation_id→project_id, status remapped)
  *   sessions(status='history') → session_boundaries
  *   messages      → messages  (+ context_version=0)
- *   settings      → app_settings
+ *   settings      → not migrated (may contain provider credentials)
  *
  * Dropped (not migrated):
  *   exams, errors, practice_sessions, vocab_lists, vocab_items, vocab_reviews
@@ -149,21 +149,9 @@ export function migrateFromAbmom(
       WHERE EXISTS (SELECT 1 FROM messages WHERE messages.session_id = sessions.id)
     `)
 
-    // ── 4. Settings → App Settings ─────────────────────────────────────────
-    let settingsRows: { key: string; value: string }[] = []
-    try {
-      settingsRows = src.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[]
-    } catch {
-      // old DB might not have this table
-    }
-
-    const insertSetting = targetDb.prepare(
-      "INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)"
-    )
-    for (const row of settingsRows) {
-      insertSetting.run(row.key, row.value)
-    }
-    logger.info('db.migration.settings_done', { settingsCount: settingsRows.length })
+    // Settings may contain provider credentials and other user-specific data.
+    // Leave app_settings empty so new installs start from built-in defaults.
+    logger.info('db.migration.settings_skipped')
   })
 
   migrate()

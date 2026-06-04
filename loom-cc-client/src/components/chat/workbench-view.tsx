@@ -189,6 +189,12 @@ function normalizeStoredModel(modelId: string | null | undefined, config?: Provi
   return 'claude-sonnet-4-6'
 }
 
+const FALLBACK_CONTEXT_MAX_TOKENS = 1_000_000
+
+function formatContextMaxShort(tokens: number): string {
+  return tokens >= 1000 ? `${Math.round(tokens / 1000)}k` : String(tokens)
+}
+
 function CompactIcon({ size = 14, strokeWidth = 2 }: { size?: number; strokeWidth?: number }) {
   return (
     <svg
@@ -565,20 +571,27 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
   // Context usage
   const lastGroup = groups[groups.length - 1]
   const activeMessages = lastGroup?.messages ?? messages
-  const sdkContextUsage = [...activeMessages]
+  const sdkContextUsage = [...messages]
     .reverse()
     .find(m => m.role === 'assistant' && m.sdkContextUsage)?.sdkContextUsage as SdkContextUsage | null | undefined
-  const contextUsed = sdkContextUsage?.totalTokens ?? 0
-  const contextMax = sdkContextUsage?.maxTokens ?? 0
-  const rawContextPct = typeof sdkContextUsage?.percentage === 'number'
+  const fallbackContextUsed = activeMessages.reduce(
+    (sum, message) => sum + (message.inputTokens || 0) + (message.outputTokens || 0),
+    0,
+  )
+  const hasSdkContextUsage = Boolean(sdkContextUsage && sdkContextUsage.totalTokens > 0 && sdkContextUsage.maxTokens > 0)
+  const contextUsed = hasSdkContextUsage ? sdkContextUsage!.totalTokens : fallbackContextUsed
+  const contextMax = hasSdkContextUsage ? sdkContextUsage!.maxTokens : FALLBACK_CONTEXT_MAX_TOKENS
+  const rawContextPct = hasSdkContextUsage && typeof sdkContextUsage?.percentage === 'number'
     ? sdkContextUsage.percentage
-    : contextUsed > 0 && contextMax > 0
+    : hasSdkContextUsage && contextUsed > 0 && contextMax > 0
       ? (contextUsed / contextMax) * 100
-      : 0
+      : contextUsed > 0 && contextMax > 0
+        ? (contextUsed / contextMax) * 100
+        : 0
   const contextPct = rawContextPct > 0 ? Math.max(1, Math.min(100, Math.round(rawContextPct))) : 0
-  const contextColor = contextPct >= 90 ? '#ef4444' : contextPct >= 75 ? '#f97316' : '#F59E0B'
-  const contextLevel = contextPct >= 90 ? 'block' : contextPct >= 85 ? 'suggest' : contextPct >= 75 ? 'strong' : contextPct >= 60 ? 'soft' : 'normal'
-  const compactStrategy = contextPct >= 90
+  const contextColor = hasSdkContextUsage && contextPct >= 90 ? '#ef4444' : hasSdkContextUsage && contextPct >= 75 ? '#f97316' : '#F59E0B'
+  const contextLevel = !hasSdkContextUsage ? 'normal' : contextPct >= 90 ? 'block' : contextPct >= 85 ? 'suggest' : contextPct >= 75 ? 'strong' : contextPct >= 60 ? 'soft' : 'normal'
+  const compactStrategy = !hasSdkContextUsage ? null : contextPct >= 90
     ? { level: 'block' as const, label: '上下文接近上限，建议先 /compact', color: '#ef4444' }
     : contextPct >= 85
       ? { level: 'suggest' as const, label: '建议现在压缩上下文', color: '#f97316' }
@@ -2419,22 +2432,34 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
 
               {/* Center: context bars + compact suggestion */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, justifyContent: 'center', position: 'relative' }}>
-                {sdkContextUsage && contextUsed > 0 && contextMax > 0 && (
+                {contextUsed > 0 && (
                   <div
-                    onClick={() => setSdkUsageOpen(open => !open)}
-                    onMouseEnter={() => setSdkUsageOpen(true)}
-                    onMouseLeave={() => setSdkUsageOpen(false)}
-                    style={{ display: 'flex', alignItems: 'center', gap: 6, border: 'none', background: 'transparent', padding: 0, cursor: 'help' }}
-                    title={`SDK Context: ${contextUsed.toLocaleString()} / ${contextMax.toLocaleString()} tokens${sdkContextUsage.isAutoCompactEnabled ? ' · Auto compact on' : ''}`}
+                    onClick={() => { if (hasSdkContextUsage) setSdkUsageOpen(open => !open) }}
+                    onMouseEnter={() => { if (hasSdkContextUsage) setSdkUsageOpen(true) }}
+                    onMouseLeave={() => { if (hasSdkContextUsage) setSdkUsageOpen(false) }}
+                    style={{ display: 'flex', alignItems: 'center', gap: 6, border: 'none', background: 'transparent', padding: 0, cursor: hasSdkContextUsage ? 'help' : 'default' }}
+                    title={hasSdkContextUsage
+                      ? `SDK Context: ${contextUsed.toLocaleString()} / ${contextMax.toLocaleString()} tokens${sdkContextUsage?.isAutoCompactEnabled ? ' · Auto compact on' : ''}`
+                      : `当前上下文已记录：${contextUsed.toLocaleString()} / ${contextMax.toLocaleString()} tokens`
+                    }
                   >
                     <div style={{ display: 'flex', gap: 3, alignItems: 'center' }}>
                       {Array.from({ length: 10 }, (_, i) => (
-                        <div key={i} style={{ width: 7, height: 14, borderRadius: 2, background: i < Math.ceil(contextPct / 10) ? contextColor : 'rgba(255,255,255,0.08)', transition: 'background 0.3s' }} />
+                        <div
+                          key={i}
+                          style={{
+                            width: 7,
+                            height: 14,
+                            borderRadius: 2,
+                            background: i < Math.ceil(contextPct / 10) ? contextColor : 'var(--theme-border-strong)',
+                            boxShadow: i < Math.ceil(contextPct / 10) ? 'none' : 'inset 0 0 0 1px var(--theme-border)',
+                            transition: 'background 0.3s',
+                          }}
+                        />
                       ))}
                     </div>
                     <span style={{ fontSize: 11, color: contextPct >= 75 ? contextColor : '#a08e7a', lineHeight: 1, whiteSpace: 'nowrap' }}>
-                      {contextPct}%
-                      <span style={{ color: '#6b5a47', marginLeft: 4 }}>/ {contextMax >= 1_000_000 ? `${Math.round(contextMax / 1_000_000)}M` : `${Math.round(contextMax / 1000)}k`} tokens</span>
+                      {contextPct}% <span style={{ color: '#6b5a47' }}>of {formatContextMaxShort(contextMax)} tokens</span>
                     </span>
                     {renderSdkUsagePopover()}
                   </div>

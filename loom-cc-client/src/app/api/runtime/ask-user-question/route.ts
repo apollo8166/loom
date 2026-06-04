@@ -4,6 +4,7 @@ import {
   type AskUserQuestionAnnotations,
   type AskUserQuestionStatus,
 } from '@/shared/runtime/sdk/ask-user-question-bridge'
+import { persistAskUserQuestionResponseByRequestId } from '@/shared/runtime/confirmation-block-store'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -12,6 +13,7 @@ export async function POST(req: Request) {
   let body: {
     requestId?: string
     action?: string
+    sessionId?: string
     answers?: AskUserQuestionAnswers
     annotations?: AskUserQuestionAnnotations
   }
@@ -36,6 +38,15 @@ export async function POST(req: Request) {
     answers: body.answers ?? {},
     annotations: body.annotations ?? {},
   })
+  const persisted = persistAskUserQuestionResponseByRequestId(
+    requestId,
+    {
+      action: action as AskUserQuestionStatus,
+      answers: body.answers ?? {},
+      annotations: body.annotations ?? {},
+    },
+    body.sessionId,
+  )
 
-  return Response.json({ ok: true, resolved })
+  return Response.json({ ok: true, resolved, persisted })
 }

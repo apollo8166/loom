@@ -1,10 +1,11 @@
 import { resolvePermission, type PermissionDecision } from '@/shared/runtime/sdk/permission-bridge'
+import { persistPermissionDecisionByRequestId } from '@/shared/runtime/confirmation-block-store'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 export async function POST(req: Request) {
-  let body: { requestId?: string; decision?: string }
+  let body: { requestId?: string; decision?: string; sessionId?: string }
   try {
     body = await req.json()
   } catch {
@@ -14,7 +15,7 @@ export async function POST(req: Request) {
     })
   }
 
-  const { requestId, decision } = body
+  const { requestId, decision, sessionId } = body
   if (!requestId || !decision) {
     return new Response(JSON.stringify({ error: 'requestId and decision required' }), {
       status: 400,
@@ -31,8 +32,13 @@ export async function POST(req: Request) {
   }
 
   const resolved = resolvePermission(requestId, decision as PermissionDecision)
+  const persisted = persistPermissionDecisionByRequestId(
+    requestId,
+    decision as PermissionDecision,
+    sessionId,
+  )
 
-  return new Response(JSON.stringify({ ok: true, resolved }), {
+  return new Response(JSON.stringify({ ok: true, resolved, persisted }), {
     headers: { 'Content-Type': 'application/json' },
   })
 }
