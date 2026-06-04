@@ -150,8 +150,8 @@ export async function POST(req: NextRequest) {
   const buffer = Buffer.from(await file.arrayBuffer())
   await writeFile(filePath, buffer)
 
-  const mimeType = file.type || 'application/octet-stream'
   const extLower = ext.toLowerCase()
+  const mimeType = extLower === '.mp4' ? 'video/mp4' : file.type || 'application/octet-stream'
   const isImage = mimeType.startsWith('image/') && !extLower.endsWith('.svg')
   const isPdf = mimeType === 'application/pdf' || extLower === '.pdf'
   const isText = mimeType.startsWith('text/') || TEXT_EXTENSIONS.has(extLower)

@@ -1,7 +1,7 @@
 /**
  * GET /api/files/serve/[filename]
  * Serves raw uploaded file bytes with the correct Content-Type.
- * Used by FilePreviewPanel for images, PDFs, and text files.
+ * Used by FilePreviewPanel for images, videos, PDFs, and text files.
  */
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -16,6 +16,7 @@ export const dynamic = 'force-dynamic'
 const MIME_MAP: Record<string, string> = {
   jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
   gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml',
+  mp4: 'video/mp4',
   pdf: 'application/pdf',
   txt: 'text/plain; charset=utf-8',
   md: 'text/plain; charset=utf-8',

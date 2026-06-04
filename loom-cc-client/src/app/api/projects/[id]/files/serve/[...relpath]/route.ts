@@ -15,6 +15,7 @@ export const dynamic = 'force-dynamic'
 const MIME_MAP: Record<string, string> = {
   jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
   gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml',
+  mp4: 'video/mp4',
   pdf: 'application/pdf',
   txt: 'text/plain; charset=utf-8',
   md: 'text/plain; charset=utf-8',

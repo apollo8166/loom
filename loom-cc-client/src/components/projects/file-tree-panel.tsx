@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom'
 import {
   Loader2, FilePlus, FolderPlus, ChevronsUpDown,
   ChevronRight, Folder, FolderOpen, FileText, GitBranch,
-  MapPin, Settings, Pencil, Trash2,
+  MapPin, Settings, Pencil, Trash2, FileVideo,
 } from 'lucide-react'
 import { FilePreviewPanel, type PreviewFile } from '@/components/chat/file-preview-panel'
 
@@ -52,10 +52,16 @@ function getExtColor(name: string): { letter: string; color: string } | null {
   return map[ext] ?? null
 }
 
+function isVideoFile(name: string): boolean {
+  return name.split('.').pop()?.toLowerCase() === 'mp4'
+}
+
 /* ── Preview helpers ── */
 const PREVIEWABLE_EXTS = new Set([
   // Images
   'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg',
+  // Video
+  'mp4',
   // PDF
   'pdf',
   // Text / code
@@ -77,6 +83,7 @@ function getFileMime(name: string): string {
   const map: Record<string, string> = {
     jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
     gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml',
+    mp4: 'video/mp4',
     pdf: 'application/pdf',
     docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     doc: 'application/msword',
@@ -180,7 +187,8 @@ function FileTreeNode({
   const isRenaming = renamingPath === node.path
   const isExpanded = expandedPaths.has(node.path)
   const isDir = node.type === 'dir'
-  const extInfo = !isDir ? getExtColor(node.name) : null
+  const isVideo = !isDir && isVideoFile(node.name)
+  const extInfo = !isDir && !isVideo ? getExtColor(node.name) : null
   const indent = depth * 12
   const showCreateHere = isDir && isExpanded && creating?.targetDirPath === node.path
 
@@ -218,7 +226,9 @@ function FileTreeNode({
         ) : (
           <>
             <span style={{ width: 11, flexShrink: 0 }} />
-            {extInfo ? (
+            {isVideo ? (
+              <FileVideo size={14} style={{ color: '#38bdf8', flexShrink: 0 }} />
+            ) : extInfo ? (
               <span style={{ fontSize: 8, fontWeight: 700, flexShrink: 0, padding: '1px 2px', borderRadius: 2, background: extInfo.color + '22', color: extInfo.color, minWidth: 20, textAlign: 'center' }}>
                 {extInfo.letter.length > 3 ? extInfo.letter.slice(0, 3) : extInfo.letter}
               </span>

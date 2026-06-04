@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { X, FileText, Loader2, Maximize2, Minimize2, Code2, Eye } from 'lucide-react'
+import { X, FileText, Loader2, Maximize2, Minimize2, Code2, Eye, FileVideo } from 'lucide-react'
 import { MarkdownRenderer } from '@/components/chat/markdown-renderer'
 
 export interface PreviewFile {
@@ -33,6 +33,10 @@ function isImage(name: string, mimeType: string) {
 
 function isPdf(name: string, mimeType: string) {
   return mimeType === 'application/pdf' || getExt(name) === 'pdf'
+}
+
+function isVideo(name: string, mimeType: string) {
+  return mimeType === 'video/mp4' || getExt(name) === 'mp4'
 }
 
 function isWordLike(ext: string) {
@@ -212,6 +216,7 @@ export function FilePreviewPanel({ file, onClose }: FilePreviewPanelProps) {
     setData(null)
     if (isImage(file.name, file.mimeType)) return
     if (isPdf(file.name, file.mimeType)) return
+    if (isVideo(file.name, file.mimeType)) return
 
     // Word / Excel: call the JSON preview API
     if (isWordLike(ext) || isExcelLike(ext)) {
@@ -269,6 +274,37 @@ export function FilePreviewPanel({ file, onClose }: FilePreviewPanelProps) {
       )
     }
 
+    if (isVideo(file.name, file.mimeType)) {
+      return (
+        <div style={{
+          flex: 1,
+          overflow: 'hidden',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: 24,
+          background: '#050505',
+        }}>
+          <video
+            src={file.url}
+            controls
+            playsInline
+            preload="metadata"
+            style={{
+              width: '100%',
+              maxWidth: '100%',
+              maxHeight: '100%',
+              borderRadius: 8,
+              background: '#000',
+              boxShadow: '0 18px 48px rgba(0,0,0,0.45)',
+            }}
+          >
+            当前环境不支持视频播放。
+          </video>
+        </div>
+      )
+    }
+
     if (loading) {
       return (
         <div style={{
@@ -323,7 +359,10 @@ export function FilePreviewPanel({ file, onClose }: FilePreviewPanelProps) {
           borderBottom: '1px solid var(--color-border-subtle)', flexShrink: 0,
         }}
       >
-        <FileText size={15} style={{ color: 'var(--color-accent-primary)', flexShrink: 0 }} />
+        {isVideo(file.name, file.mimeType)
+          ? <FileVideo size={15} style={{ color: '#38bdf8', flexShrink: 0 }} />
+          : <FileText size={15} style={{ color: 'var(--color-accent-primary)', flexShrink: 0 }} />
+        }
         <span style={{
           fontSize: 13, fontWeight: 500, color: 'var(--color-text-primary)',
           flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',

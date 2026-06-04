@@ -5,7 +5,7 @@ import {
   ChevronDown, ChevronRight, X, Check, Copy, Shield, ShieldOff,
   ZapOff, Zap, Sparkles, Bot, Crown, Rabbit, Route, PenLine,
   Loader2, Download, ArrowUp, Square, Folder, Plus, GitBranch,
-  Scissors, Eye,
+  Scissors, Eye, FileVideo,
 } from 'lucide-react'
 import { cn } from '@/shared/lib/utils'
 import type { Project, Session, ThinkingMode, TaskInfo, SdkContextUsage } from '@/shared/types'
@@ -643,6 +643,7 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
   const getPlaceholder = useCallback((att: Attachment) => {
     if (att.isImage) return `[Image #${att.num}]`
     if (att.tier === 'pdf') return `[PDF #${att.num}]`
+    if (att.mimeType === 'video/mp4' || att.name.toLowerCase().endsWith('.mp4')) return `[Video #${att.num}]`
     return `[File #${att.num}]`
   }, [])
 
@@ -773,7 +774,10 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
     const numberedEntries = validEntries.map(e => ({ ...e, num: ++attachNumRef.current }))
     for (const { uploadId, file, num } of numberedEntries) {
       const isImage = file.type.startsWith('image/')
-      const tier = isImage ? 'image' : file.type === 'application/pdf' ? 'pdf' : 'text'
+      const ext = file.name.split('.').pop()?.toLowerCase() || ''
+      const isVideo = file.type === 'video/mp4' || ext === 'mp4'
+      const mimeType = isVideo ? 'video/mp4' : file.type
+      const tier = isImage ? 'image' : file.type === 'application/pdf' ? 'pdf' : isVideo ? 'binary' : 'text'
       const formData = new FormData()
       formData.append('file', file)
       const xhr = new XMLHttpRequest()
@@ -789,10 +793,10 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
             const newAtt: Attachment = {
               num, name: file.name, filename: data.filename,
               originalFilename: data.originalFilename,
-              mimeType: file.type, tier, isImage, size: file.size,
+              mimeType, tier, isImage, size: file.size,
             }
             setAttachments(prev => [...prev, newAtt])
-            const placeholder = isImage ? `[Image #${num}]` : tier === 'pdf' ? `[PDF #${num}]` : `[File #${num}]`
+            const placeholder = isImage ? `[Image #${num}]` : tier === 'pdf' ? `[PDF #${num}]` : isVideo ? `[Video #${num}]` : `[File #${num}]`
             setInput(prev => { const sep = prev && !prev.endsWith(' ') ? ' ' : ''; return prev + sep + placeholder })
           } catch { /* ignore */ }
         } else {
@@ -2037,7 +2041,10 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
                       </div>
                     ) : (
                       <div style={{ width: 40, height: 40, borderRadius: 4, background: cfg!.color, flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2 }}>
-                        <span style={{ fontSize: cfg!.letter.length > 2 ? 9 : cfg!.letter.length > 1 ? 11 : 14, fontWeight: 700, color: 'white', fontFamily: 'monospace', lineHeight: 1 }}>{cfg!.letter}</span>
+                        {cfg!.icon === 'video'
+                          ? <FileVideo size={18} style={{ color: 'white' }} />
+                          : <span style={{ fontSize: cfg!.letter.length > 2 ? 9 : cfg!.letter.length > 1 ? 11 : 14, fontWeight: 700, color: 'white', fontFamily: 'monospace', lineHeight: 1 }}>{cfg!.letter}</span>
+                        }
                         <span style={{ fontSize: 8, color: 'rgba(255,255,255,0.7)', lineHeight: 1 }}>#{a.num}</span>
                       </div>
                     )}

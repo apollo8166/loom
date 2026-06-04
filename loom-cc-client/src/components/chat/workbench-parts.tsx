@@ -6,6 +6,7 @@ import {
   ArrowUp, Square, ChevronDown, ChevronRight, XCircle, Loader2, ShieldAlert,
   X, Check, Copy, Shield, ShieldOff, Globe, Terminal, FileText, Search, FileDiff,
   ZapOff, Zap, Sparkles, Bot, Crown, Rabbit, Route, PenLine, MessageCircle,
+  FileVideo,
 } from 'lucide-react'
 import { cn } from '@/shared/lib/utils'
 import type { Message, ContentBlock, PermissionStatus, SessionBoundary, AskUserQuestionItem, AskUserQuestionAnswers, AskUserQuestionAnnotations, AskUserQuestionStatus } from '@/shared/types'
@@ -912,6 +913,7 @@ function getMimeFromName(name: string): string {
     jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
     gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml',
     pdf: 'application/pdf',
+    mp4: 'video/mp4',
   }
   return map[ext] || 'application/octet-stream'
 }
@@ -979,7 +981,7 @@ export function UserMessage({ blocks, fallbackContent, onPreviewFile }: {
           const ext = b.name.split('.').pop()?.toLowerCase() || ''
           const isPptLike = ['ppt', 'pptx', 'odp'].includes(ext)
           const canPreview = !!onPreviewFile && !isPptLike
-          const cfg = getChipConfig(b.name, b.mimeType.includes('pdf') ? 'pdf' : 'text')
+          const cfg = getChipConfig(b.name, b.mimeType.includes('pdf') ? 'pdf' : b.mimeType === 'video/mp4' ? 'video' : 'text')
           return (
             <div
               key={`file-${i}`}
@@ -999,9 +1001,14 @@ export function UserMessage({ blocks, fallbackContent, onPreviewFile }: {
                 background: cfg.color,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
               }}>
-                <span style={{ fontSize: cfg.letter.length > 2 ? 9 : cfg.letter.length > 1 ? 11 : 14, fontWeight: 700, color: 'white', fontFamily: 'monospace', lineHeight: 1 }}>
-                  {cfg.letter}
-                </span>
+                {cfg.icon === 'video'
+                  ? <FileVideo size={20} style={{ color: 'white' }} />
+                  : (
+                    <span style={{ fontSize: cfg.letter.length > 2 ? 9 : cfg.letter.length > 1 ? 11 : 14, fontWeight: 700, color: 'white', fontFamily: 'monospace', lineHeight: 1 }}>
+                      {cfg.letter}
+                    </span>
+                  )
+                }
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <p style={{ fontSize: 12, fontWeight: 500, color: 'var(--color-text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -1195,6 +1202,7 @@ export function formatFileSize(bytes: number): string {
 
 export const SUPPORTED_EXTENSIONS = new Set([
   '.jpg', '.jpeg', '.png', '.gif', '.webp',
+  '.mp4',
   '.pdf',
   '.txt', '.md', '.mdx', '.rst', '.log', '.csv', '.tsv', '.jsonl',
   '.ts', '.tsx', '.js', '.jsx', '.py', '.rs', '.go', '.java',
@@ -1209,10 +1217,11 @@ export const SUPPORTED_EXTENSIONS = new Set([
   '.ppt', '.pptx', '.odp',
 ])
 
-export interface ChipConfig { letter: string; color: string; typeLabel: string }
+export interface ChipConfig { letter: string; color: string; typeLabel: string; icon?: 'video' }
 
 export function getChipConfig(name: string, tier: string): ChipConfig {
   const ext = name.split('.').pop()?.toLowerCase() || ''
+  if (tier === 'video' || ext === 'mp4') return { letter: 'MP4', color: '#0ea5e9', typeLabel: 'Video', icon: 'video' }
   if (tier === 'pdf' || ext === 'pdf') return { letter: 'PDF', color: '#ef4444', typeLabel: 'PDF' }
   if (['doc', 'docx', 'odt'].includes(ext)) return { letter: 'W', color: '#2b579a', typeLabel: 'Word' }
   if (['xls', 'xlsx', 'xlsm', 'xlsb', 'ods'].includes(ext)) return { letter: 'X', color: '#217346', typeLabel: 'Excel' }
