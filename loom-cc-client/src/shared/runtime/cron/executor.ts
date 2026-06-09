@@ -8,6 +8,9 @@ import { getDb } from '@/shared/db/db'
 import { createLoomQuery } from '@/shared/runtime/sdk/client'
 import { MessageMapper } from '@/shared/runtime/sdk/message-mapper'
 import { logger } from '@/shared/logging/logger'
+import { parseTaskSkillNames } from '@/shared/runtime/cron/task-skills'
+import { publishProjectEvent } from '@/shared/runtime/session-events'
+import { registerActiveRun } from '@/shared/runtime/active-runs'
 
 interface RawTask {
   id: string
@@ -15,6 +18,7 @@ interface RawTask {
   name: string
   description: string   // 任务说明，用户填写，也是发给 AI 的内容
   prompt: string        // legacy stored skill content when selected; otherwise task text
+  agent_name: string
   skill_name: string
   model: string
 }
@@ -51,17 +55,17 @@ export async function executeTask(task: RawTask): Promise<{ status: 'ok' | 'erro
   // Always prefer task.description (the human-readable task instruction filled by user).
   // Fall back to task.prompt only when description is missing (legacy tasks without the column).
   // If a skill is selected and description is empty, task.prompt may be legacy skill content; don't show that.
-  const hasSkill = !!(task.skill_name && task.prompt)
+  const skillNames = parseTaskSkillNames(task.skill_name)
+  const hasSkill = skillNames.length > 0
+  const agentName = task.agent_name?.trim() || ''
   const displayPrompt = task.description?.trim()
     || (hasSkill ? task.name : task.prompt?.trim())
     || task.name
 
-  // effectivePrompt: sent to SDK. When a skill is selected, keep the native
-  // slash-style invocation and pass the skill name separately through options.skills.
+  // effectivePrompt: sent to SDK. Selected skills are passed through
+  // options.skills so multi-skill tasks are handled by the Claude Agent SDK.
   const taskDesc = task.description?.trim() || (!hasSkill ? task.prompt?.trim() : '') || ''
-  const effectivePrompt = hasSkill
-    ? `/${task.skill_name.trim()} ${taskDesc}`.trim()
-    : taskDesc
+  const effectivePrompt = taskDesc || task.name
 
   logger.info('cron.task_prepare_prompt', {
     taskId: task.id,
@@ -70,10 +74,11 @@ export async function executeTask(task: RawTask): Promise<{ status: 'ok' | 'erro
     sessionId,
     model,
     hasSkill,
+    agentName: agentName || undefined,
     descriptionChars: task.description?.length ?? 0,
     taskDescriptionChars: taskDesc.length,
     effectivePromptChars: effectivePrompt.length,
-    enabledSkills: hasSkill ? [task.skill_name.trim()] : [],
+    enabledSkills: hasSkill ? skillNames : [],
   })
 
   const userMsgId = crypto.randomUUID()
@@ -84,6 +89,15 @@ export async function executeTask(task: RawTask): Promise<{ status: 'ok' | 'erro
 
   let resultText = ''
   let status: 'ok' | 'error' = 'ok'
+  const abortController = new AbortController()
+  const unregisterActiveRun = registerActiveRun(sessionId, abortController)
+  publishProjectEvent(task.project_id, {
+    type: 'session_run_started',
+    source: 'schedule',
+    projectId: task.project_id,
+    sessionId,
+    startedAt: new Date().toISOString(),
+  })
 
   try {
     const q = createLoomQuery({
@@ -93,7 +107,9 @@ export async function executeTask(task: RawTask): Promise<{ status: 'ok' | 'erro
       bypassPermissions: true,
       resumeSession: false,
       projectWorkspacePath: project.workspace_path,
-      enabledSkills: hasSkill ? [task.skill_name.trim()] : undefined,
+      agentName: agentName || undefined,
+      enabledSkills: hasSkill ? skillNames : undefined,
+      abortController,
     })
 
     const mapper = new MessageMapper()
@@ -118,6 +134,15 @@ export async function executeTask(task: RawTask): Promise<{ status: 'ok' | 'erro
       taskName: task.name,
       sessionId,
       model,
+    })
+  } finally {
+    unregisterActiveRun()
+    publishProjectEvent(task.project_id, {
+      type: 'session_run_finished',
+      source: 'schedule',
+      projectId: task.project_id,
+      sessionId,
+      finishedAt: new Date().toISOString(),
     })
   }
 

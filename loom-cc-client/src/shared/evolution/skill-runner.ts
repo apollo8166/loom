@@ -1,7 +1,7 @@
 import crypto from 'node:crypto'
-import { resolveProvider } from '@/shared/runtime/provider'
 import { logger } from '@/shared/logging/logger'
 import { getDb } from '@/shared/db/db'
+import { getBackgroundModelCandidates, isUnavailableModelError } from '@/shared/runtime/background-model'
 import type { EvolutionPacket, EvolutionSkillName } from './types'
 
 const SKILL_SYSTEM_PROMPTS: Record<EvolutionSkillName, string> = {
@@ -42,12 +42,20 @@ const SKILL_SYSTEM_PROMPTS: Record<EvolutionSkillName, string> = {
 输出格式：
 {"includeRules":["rule_id"],"includeMemories":["memory_id"],"exclude":["id"],"rationale":"...","estimatedChars":0}`,
 
-  'project-evolution': `你是 Loom 的 project-evolution skill。周期性审视项目 memory、feedback、retrospective 和 rules，建议升级、合并、降级、废弃。
+  'project-evolution': `你是 Loom 的 project-evolution skill。周期性审视项目 L1 observations、L2 semantic memories、L3 project dossier 和 rules，做去重、归纳、合并、降级、废弃建议。
+
+原则：
+- 不要发明新事实，只能基于输入中已有的 id 和内容整理。
+- 相似或重复内容要归并为更短、更稳定的 canonical 表述。
+- L3 dossier 应是项目级稳定摘要，不要堆叠近似句。
+- L1 observation 被 L2/L3 吸收后，应建议标记为 promoted。
+- 只引用输入中存在的 semantic memory id 和 observation id。
+- 不要记录密钥、账号、token 值或隐私敏感内容。
 
 只输出 JSON。
 
 输出格式：
-{"actions":[{"action":"promote|merge|deprecate|pause|rewrite|keep","entityId":"...","reason":"...","replacement":"..."}]}`,
+{"dossier":{"summary":"- ...","stableRules":"- ...","recentRisks":"- ...","repeatedIssues":"- ...","deprecatedUnderstanding":"- ...","nextSteps":"- ..."},"semanticUpdates":[{"id":"sem_id","action":"rewrite|merge|archive|keep","title":"...","content":"...","category":"risk|workflow|correction|feedback|decision|fact|preference|general","status":"active|stale|archived","mergeSourceIds":["sem_id"],"absorbedObservationIds":["obs_id"],"reason":"..."}],"observationUpdates":[{"id":"obs_id","status":"promoted|archived|active","reason":"..."}],"notes":"..."}`,
 }
 
 function preview(value: string, max = 220): string {
@@ -211,6 +219,9 @@ export async function runEvolutionSkill(params: {
       evidence: params.packet.candidate.evidence,
     } : undefined,
     relatedMemories: params.packet.relatedMemories.slice(0, 5),
+    projectDossier: params.packet.projectDossier,
+    semanticMemories: params.packet.semanticMemories.slice(0, 40),
+    recentObservations: params.packet.recentObservations.slice(0, 30),
     activeRules: params.packet.activeRules.slice(0, 20),
     shadowRules: params.packet.shadowRules.slice(0, 20),
     metrics: params.packet.metrics,
@@ -225,40 +236,60 @@ export async function runEvolutionSkill(params: {
   })
 
   try {
-    const provider = resolveProvider('claude-haiku-4-5')
-    if (!provider.apiKey) {
-      finishSkillRun({ id: runId, status: 'skipped', outputSummary: 'provider has no API key' })
-      return {}
+    const candidates = getBackgroundModelCandidates()
+    let lastError: unknown = null
+    for (const candidate of candidates) {
+      const provider = candidate.provider
+      if (!provider.apiKey) {
+        finishSkillRun({ id: runId, status: 'skipped', outputSummary: 'provider has no API key' })
+        return {}
+      }
+      try {
+        logger.info('evolution.skill.start', {
+          runId,
+          skillName: params.skillName,
+          providerId: provider.providerId,
+          model: candidate.modelId,
+          tier: candidate.tier,
+          trigger: params.packet.trigger,
+          userChars: user.length,
+        })
+        const response = provider.apiFormat === 'openai'
+          ? await callOpenAI({
+              apiKey: provider.apiKey,
+              baseUrl: provider.upstreamBaseUrl || provider.baseUrl || '',
+              model: candidate.modelId,
+              system,
+              user,
+            })
+          : await callAnthropic({
+              apiKey: provider.apiKey,
+              baseUrl: provider.upstreamBaseUrl || provider.baseUrl,
+              model: candidate.modelId,
+              system,
+              user,
+            })
+        const text = extractTextFromResponse(response)
+        const parsed = extractJsonObject(text)
+        finishSkillRun({ id: runId, status: 'done', outputSummary: preview(text) })
+        return parsed
+      } catch (err) {
+        lastError = err
+        logger.warn('evolution.skill.model_attempt_failed', {
+          runId,
+          skillName: params.skillName,
+          providerId: provider.providerId,
+          model: candidate.modelId,
+          tier: candidate.tier,
+          retryNextModel: isUnavailableModelError(err),
+          error: err instanceof Error ? err.message : String(err),
+        })
+        if (!isUnavailableModelError(err)) throw err
+      }
     }
-    const model = provider.resolvedModelId ||
-      (provider.providerId === 'anthropic' ? 'claude-haiku-4-5-20251001' : 'claude-haiku-4-5')
-    logger.info('evolution.skill.start', {
-      runId,
-      skillName: params.skillName,
-      providerId: provider.providerId,
-      model,
-      trigger: params.packet.trigger,
-      userChars: user.length,
-    })
-    const response = provider.apiFormat === 'openai'
-      ? await callOpenAI({
-          apiKey: provider.apiKey,
-          baseUrl: provider.upstreamBaseUrl || provider.baseUrl || '',
-          model,
-          system,
-          user,
-        })
-      : await callAnthropic({
-          apiKey: provider.apiKey,
-          baseUrl: provider.upstreamBaseUrl || provider.baseUrl,
-          model,
-          system,
-          user,
-        })
-    const text = extractTextFromResponse(response)
-    const parsed = extractJsonObject(text)
-    finishSkillRun({ id: runId, status: 'done', outputSummary: preview(text) })
-    return parsed
+    if (lastError) throw lastError
+    finishSkillRun({ id: runId, status: 'skipped', outputSummary: 'no background model candidates' })
+    return {}
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err)
     finishSkillRun({ id: runId, status: 'failed', error })

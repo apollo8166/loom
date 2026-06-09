@@ -1,12 +1,14 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { createPortal } from 'react-dom'
 import {
   ChevronLeft, Plus, MoreHorizontal, Pencil,
-  Trash2, Loader2, CheckCircle2, XCircle, Clock, Zap,
+  Trash2, Loader2, CheckCircle2, XCircle, Clock, Zap, Bot,
 } from 'lucide-react'
 import type { ScheduledTask, TaskExecution } from '@/shared/types'
 import { cronToLabel, getNextRun } from '@/shared/runtime/cron/cron-parser'
+import { getTaskSkillNames } from '@/shared/runtime/cron/task-skills'
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 /** Parse a single field from SKILL.md frontmatter */
@@ -125,17 +127,68 @@ interface SkillOption {
   raw: string       // full source including frontmatter (for display)
 }
 
+interface AgentOption {
+  id: string
+  filename: string
+  name: string
+  description: string
+  source: 'project' | 'global'
+}
+
+function SkillDescription({ text, maxChars = 72, stopPropagation = false }: {
+  text?: string
+  maxChars?: number
+  stopPropagation?: boolean
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const description = text?.trim() ?? ''
+  if (!description) return <span>—</span>
+
+  const canExpand = description.length > maxChars
+  const visibleText = expanded || !canExpand
+    ? description
+    : `${description.slice(0, maxChars).trimEnd()}…`
+
+  return (
+    <span style={{ whiteSpace: expanded ? 'pre-wrap' : 'normal', wordBreak: 'break-word' }}>
+      {visibleText}
+      {canExpand && (
+        <button
+          type="button"
+          onClick={e => {
+            if (stopPropagation) e.stopPropagation()
+            setExpanded(v => !v)
+          }}
+          style={{
+            marginLeft: 6, padding: 0, border: 'none', background: 'transparent',
+            color: 'var(--color-accent-primary)', cursor: 'pointer', fontSize: 'inherit',
+          }}
+        >
+          {expanded ? '收起' : '展开'}
+        </button>
+      )}
+    </span>
+  )
+}
+
 // ── Skill drawer (slides in from right) ──────────────────────────────────────
 
 interface SkillDrawerProps {
   workspacePath?: string
-  onSelect: (skill: SkillOption) => void
+  selectedNames: string[]
+  onApply: (skillNames: string[]) => void
   onClose: () => void
 }
 
-function SkillDrawer({ workspacePath, onSelect, onClose }: SkillDrawerProps) {
+function SkillDrawer({ workspacePath, selectedNames, onApply, onClose }: SkillDrawerProps) {
+  const [mounted, setMounted] = useState(false)
   const [skills, setSkills] = useState<SkillOption[]>([])
+  const [draftNames, setDraftNames] = useState<string[]>(selectedNames)
   const [loading, setLoading] = useState(true)
+
+  useEffect(() => { setMounted(true) }, [])
+
+  useEffect(() => { setDraftNames(selectedNames) }, [selectedNames])
 
   useEffect(() => {
     const url = workspacePath
@@ -148,31 +201,54 @@ function SkillDrawer({ workspacePath, onSelect, onClose }: SkillDrawerProps) {
       .finally(() => setLoading(false))
   }, [workspacePath])
 
-  return (
-    <>
-      {/* Click-outside backdrop (only covers behind drawer, not full screen) */}
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', handler)
+    return () => document.removeEventListener('keydown', handler)
+  }, [onClose])
+
+  const toggleSkill = (name: string) => {
+    setDraftNames(prev => prev.includes(name) ? prev.filter(n => n !== name) : [...prev, name])
+  }
+
+  const selected = new Set(draftNames)
+
+  if (!mounted) return null
+
+  return createPortal(
+    <div
+      onPointerDown={onClose}
+      style={{ position: 'fixed', inset: 0, zIndex: 3000, background: 'rgba(0,0,0,0.12)' }}
+    >
       <div
-        onClick={onClose}
-        style={{ position: 'fixed', inset: 0, zIndex: 1010 }}
-      />
-      {/* Drawer panel */}
-      <div style={{
-        position: 'fixed', top: 0, right: 0, bottom: 0, zIndex: 1011,
-        width: 440, background: 'var(--color-bg-surface)',
-        borderLeft: '1px solid var(--color-border-subtle)',
-        boxShadow: '-8px 0 32px rgba(0,0,0,0.3)',
-        display: 'flex', flexDirection: 'column',
-      }}>
+        role="dialog"
+        aria-modal="true"
+        onPointerDown={e => e.stopPropagation()}
+        onClick={e => e.stopPropagation()}
+        style={{
+          position: 'absolute', top: 0, right: 0, bottom: 0,
+          width: 440, background: 'var(--color-bg-surface)',
+          borderLeft: '1px solid var(--color-border-subtle)',
+          boxShadow: '-8px 0 32px rgba(0,0,0,0.3)',
+          display: 'flex', flexDirection: 'column',
+        }}
+      >
         {/* Header */}
         <div style={{
           height: 52, flexShrink: 0, display: 'flex', alignItems: 'center',
           padding: '0 20px', borderBottom: '1px solid var(--color-border-subtle)',
         }}>
           <span style={{ flex: 1, fontSize: 14, fontWeight: 700, color: 'var(--color-text-primary)' }}>选择 Skill</span>
-          <button onClick={onClose} style={{
-            padding: '3px 10px', borderRadius: 5, border: '1px solid var(--color-border-subtle)',
-            background: 'transparent', cursor: 'pointer', fontSize: 12, color: 'var(--color-text-muted)',
-          }}>关闭</button>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{
+              padding: '3px 10px', borderRadius: 5, border: '1px solid var(--color-border-subtle)',
+              background: 'transparent', cursor: 'pointer', fontSize: 12, color: 'var(--color-text-muted)',
+            }}
+          >关闭</button>
         </div>
 
         {/* Table */}
@@ -202,13 +278,21 @@ function SkillDrawer({ workspacePath, onSelect, onClose }: SkillDrawerProps) {
                 {skills.map(s => (
                   <tr
                     key={s.name}
-                    onClick={() => { onSelect(s); onClose() }}
+                    onClick={() => toggleSkill(s.name)}
                     style={{ cursor: 'pointer', borderBottom: '1px solid var(--color-border-subtle)' }}
                     onMouseEnter={e => (e.currentTarget.style.background = 'var(--color-bg-surface-high)')}
                     onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
                   >
                     <td style={{ padding: '10px 16px', fontSize: 13, fontWeight: 600, color: 'var(--color-text-primary)', whiteSpace: 'nowrap' }}>
-                      {s.name}
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                        <input
+                          type="checkbox"
+                          checked={selected.has(s.name)}
+                          readOnly
+                          style={{ pointerEvents: 'none', accentColor: 'var(--color-accent-primary)' }}
+                        />
+                        {s.name}
+                      </span>
                     </td>
                     <td style={{ padding: '10px 16px', whiteSpace: 'nowrap' }}>
                       <span style={{
@@ -220,7 +304,7 @@ function SkillDrawer({ workspacePath, onSelect, onClose }: SkillDrawerProps) {
                       </span>
                     </td>
                     <td style={{ padding: '10px 16px', fontSize: 12, color: 'var(--color-text-muted)', lineHeight: 1.4 }}>
-                      {s.description || '—'}
+                      <SkillDescription text={s.description} maxChars={64} stopPropagation />
                     </td>
                   </tr>
                 ))}
@@ -228,8 +312,40 @@ function SkillDrawer({ workspacePath, onSelect, onClose }: SkillDrawerProps) {
             </table>
           )}
         </div>
+
+        <div style={{
+          height: 54, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '0 20px', borderTop: '1px solid var(--color-border-subtle)',
+        }}>
+          <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
+            已选择 {draftNames.length} 个 Skill
+          </span>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              type="button"
+              onClick={onClose}
+              style={{
+                padding: '6px 12px', borderRadius: 6, border: '1px solid var(--color-border-subtle)',
+                background: 'transparent', color: 'var(--color-text-secondary)', cursor: 'pointer', fontSize: 12,
+              }}
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              onClick={() => { onApply(draftNames); onClose() }}
+              style={{
+                padding: '6px 14px', borderRadius: 6, border: 'none',
+                background: 'var(--color-accent-primary)', color: '#fff', cursor: 'pointer', fontSize: 12, fontWeight: 600,
+              }}
+            >
+              完成
+            </button>
+          </div>
+        </div>
       </div>
-    </>
+    </div>,
+    document.body,
   )
 }
 
@@ -246,12 +362,13 @@ interface TaskFormProps {
 
 function TaskForm({ projectId, defaultModel, workspacePath, initial, onSave, onClose }: TaskFormProps) {
   const [name, setName] = useState(initial?.name ?? '')
+  const [agentName, setAgentName] = useState(initial?.agentName ?? '')
+  const [agents, setAgents] = useState<AgentOption[]>([])
   // description = 任务说明 = what gets sent to SDK.
   const [description, setDescription] = useState(
     initial ? (initial.description || initial.prompt) : ''
   )
-  const [skillName, setSkillName] = useState(initial?.skillName ?? '')
-  const [skillContent, setSkillContent] = useState(initial?.skillName ? (initial.prompt ?? '') : '')
+  const [skillNames, setSkillNames] = useState<string[]>(() => getTaskSkillNames(initial))
   const parsed = initial?.schedule ? parseCron(initial.schedule) : { freq: 'daily' as Freq, opts: defaultOpts() }
   const [freq, setFreq] = useState<Freq>(parsed.freq)
   const [opts, setOpts] = useState<FreqOpts>(parsed.opts)
@@ -261,12 +378,26 @@ function TaskForm({ projectId, defaultModel, workspacePath, initial, onSave, onC
 
   const schedule = buildCron(freq, opts)
 
-  const handleSelectSkill = (skill: SkillOption) => {
-    setSkillName(skill.name)
-    setSkillContent(skill.raw)   // store full raw content; executor will strip frontmatter
-  }
+  useEffect(() => {
+    const url = workspacePath
+      ? `/api/config/agents?workspacePath=${encodeURIComponent(workspacePath)}`
+      : '/api/config/agents'
+    fetch(url)
+      .then(r => r.json())
+      .then((d: { agents?: AgentOption[] }) => {
+        const nextAgents = d.agents ?? []
+        setAgents(nextAgents)
+        setAgentName(prev => {
+          if (!prev) return prev
+          const match = nextAgents.find(agent => agent.id === prev || agent.name === prev)
+          return match?.id ?? prev
+        })
+      })
+      .catch(() => setAgents([]))
+  }, [workspacePath])
 
-  const clearSkill = () => { setSkillName(''); setSkillContent('') }
+  const removeSkill = (name: string) => setSkillNames(prev => prev.filter(skill => skill !== name))
+  const clearSkills = () => setSkillNames([])
 
   const save = async () => {
     if (!name.trim()) { setErr('请输入任务名称'); return }
@@ -283,10 +414,9 @@ function TaskForm({ projectId, defaultModel, workspacePath, initial, onSave, onC
           name: name.trim(),
           description: description.trim(),
           schedule,
-          // Keep legacy prompt storage for existing task previews; execution
-          // invokes skills through Claude Agent SDK instead of inlining this body.
-          prompt: skillContent.trim() || description.trim(),
-          skillName: skillName,
+          prompt: description.trim(),
+          agentName,
+          skillNames,
           model: defaultModel,
         }),
       })
@@ -327,33 +457,71 @@ function TaskForm({ projectId, defaultModel, workspacePath, initial, onSave, onC
 
           {/* 任务说明 = prompt sent to AI */}
           <div style={{ marginBottom: 14 }}>
+            <label style={lbl}>执行 Agent</label>
+            <select style={inp} value={agentName} onChange={e => setAgentName(e.target.value)}>
+              <option value="">默认 Agent</option>
+              {agents.map(agent => (
+                <option key={`${agent.source}:${agent.id}`} value={agent.id}>
+                  {agent.name}（{agent.source === 'project' ? '项目' : '全局'}）
+                </option>
+              ))}
+            </select>
+            {agentName && (
+              <div style={{ marginTop: 6, fontSize: 11, color: 'var(--color-text-muted)', lineHeight: 1.5 }}>
+                {agents.find(agent => agent.id === agentName || agent.name === agentName)?.description || '以该 Sub-Agent 的系统提示、工具限制和模型配置运行。'}
+              </div>
+            )}
+          </div>
+
+          {/* 任务说明 = prompt sent to AI */}
+          <div style={{ marginBottom: 14 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
               <label style={{ ...lbl, marginBottom: 0 }}>任务说明</label>
-              {skillName ? (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{
-                    fontSize: 11, padding: '2px 8px', borderRadius: 5, fontWeight: 600,
-                    background: 'rgba(245,158,11,0.12)', color: 'var(--color-accent-primary)',
-                    border: '1px solid rgba(245,158,11,0.3)',
-                  }}>
-                    Skill: {skillName}
-                  </span>
-                  <button onClick={clearSkill} style={{
-                    fontSize: 11, padding: '2px 6px', borderRadius: 4, cursor: 'pointer',
-                    border: '1px solid var(--color-border-subtle)', background: 'transparent',
-                    color: 'var(--color-text-muted)',
-                  }}>×</button>
-                </div>
-              ) : (
-                <button onClick={() => setShowSkillDrawer(true)} style={{
+              <button type="button" onClick={() => setShowSkillDrawer(true)} style={{
                   fontSize: 11, padding: '3px 10px', borderRadius: 5, cursor: 'pointer',
                   border: '1px solid var(--color-border-subtle)', background: 'transparent',
                   color: 'var(--color-text-secondary)',
                 }}>
-                  选择 Skill →
-                </button>
-              )}
+                {skillNames.length > 0 ? '管理 Skill →' : '选择 Skill →'}
+              </button>
             </div>
+            {skillNames.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+                {skillNames.map(skill => (
+                  <span
+                    key={skill}
+                    style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 5,
+                      fontSize: 11, padding: '2px 7px', borderRadius: 5, fontWeight: 600,
+                      background: 'rgba(245,158,11,0.12)', color: 'var(--color-accent-primary)',
+                      border: '1px solid rgba(245,158,11,0.3)', maxWidth: '100%',
+                    }}
+                  >
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{skill}</span>
+                    <button
+                      type="button"
+                      onClick={() => removeSkill(skill)}
+                      aria-label={`移除 ${skill}`}
+                      style={{
+                        padding: 0, border: 'none', background: 'transparent',
+                        color: 'inherit', cursor: 'pointer', fontSize: 12, lineHeight: 1,
+                      }}
+                    >×</button>
+                  </span>
+                ))}
+                <button
+                  type="button"
+                  onClick={clearSkills}
+                  style={{
+                    fontSize: 11, padding: '2px 6px', borderRadius: 4, cursor: 'pointer',
+                    border: '1px solid var(--color-border-subtle)', background: 'transparent',
+                    color: 'var(--color-text-muted)',
+                  }}
+                >
+                  清空
+                </button>
+              </div>
+            )}
             <textarea
               style={{ ...inp, height: 90, resize: 'vertical', fontFamily: 'inherit' }}
               value={description}
@@ -431,7 +599,8 @@ function TaskForm({ projectId, defaultModel, workspacePath, initial, onSave, onC
       {showSkillDrawer && (
         <SkillDrawer
           workspacePath={workspacePath}
-          onSelect={handleSelectSkill}
+          selectedNames={skillNames}
+          onApply={setSkillNames}
           onClose={() => setShowSkillDrawer(false)}
         />
       )}
@@ -526,6 +695,14 @@ function TaskCard({ task, projectId, onToggle, onEdit, onDelete, onClick }: Task
       </div>
 
       {/* Description preview — fixed 3-line area, always occupies same height */}
+      {task.agentName && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 8, fontSize: 11, color: 'var(--color-accent-primary)' }}>
+          <Bot size={12} />
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{task.agentName}</span>
+        </div>
+      )}
+
+      {/* Description preview — fixed 3-line area, always occupies same height */}
       <div style={{
         fontSize: 12, color: 'var(--color-text-muted)', lineHeight: 1.5,
         height: '4.5em',            /* 3 lines × 1.5 line-height */
@@ -570,6 +747,162 @@ function TaskCard({ task, projectId, onToggle, onEdit, onDelete, onClick }: Task
       </div>
     </div>
   )
+}
+
+function TaskTable({
+  tasks,
+  onToggle,
+  onEdit,
+  onDelete,
+  onClick,
+}: {
+  tasks: ScheduledTask[]
+  onToggle: (id: string, enabled: boolean) => void
+  onEdit: (task: ScheduledTask) => void
+  onDelete: (id: string) => void
+  onClick: (task: ScheduledTask) => void
+}) {
+  return (
+    <div style={{
+      border: '1px solid var(--color-border-subtle)',
+      borderRadius: 10,
+      background: 'var(--color-bg-surface)',
+      overflow: 'hidden',
+    }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+        <thead>
+          <tr style={{ borderBottom: '1px solid var(--color-border-subtle)', background: 'var(--color-bg-nav)' }}>
+            <th style={{ ...thStyle, width: 44 }}></th>
+            <th style={{ ...thStyle, width: 210 }}>任务</th>
+            <th style={{ ...thStyle, width: 160 }}>执行计划</th>
+            <th style={{ ...thStyle, width: 170 }}>Agent</th>
+            <th style={thStyle}>能力 / 说明</th>
+            <th style={{ ...thStyle, width: 116, textAlign: 'right' }}>操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          {tasks.map(task => {
+            const skillNames = getTaskSkillNames(task)
+            return (
+              <tr
+                key={task.id}
+                onClick={() => onClick(task)}
+                style={{ borderBottom: '1px solid var(--color-border-subtle)', cursor: 'pointer' }}
+                onMouseEnter={e => (e.currentTarget.style.background = 'var(--color-bg-surface-high)')}
+                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+              >
+                <td style={tdStyle}>
+                  <button
+                    onClick={e => { e.stopPropagation(); onToggle(task.id, !task.enabled) }}
+                    title={task.enabled ? '暂停任务' : '启用任务'}
+                    style={{
+                      position: 'relative', width: 30, height: 17, borderRadius: 9,
+                      border: '1px solid', padding: 0, cursor: 'pointer',
+                      background: task.enabled ? 'var(--color-accent-primary)' : 'var(--color-bg-surface-highest)',
+                      borderColor: task.enabled ? 'var(--color-accent-primary)' : 'var(--color-border-strong)',
+                    }}
+                  >
+                    <span style={{
+                      position: 'absolute', top: 2, left: task.enabled ? 15 : 2,
+                      width: 11, height: 11, borderRadius: '50%',
+                      background: task.enabled ? '#fff' : 'var(--color-text-muted)',
+                      transition: 'left 0.2s',
+                    }} />
+                  </button>
+                </td>
+                <td style={tdStyle}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--color-text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {task.name}
+                  </div>
+                  {task.enabled && nextRunLabel(task) && (
+                    <div style={{ marginTop: 3, fontSize: 11, color: 'var(--color-text-disabled)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      下次 {nextRunLabel(task)}
+                    </div>
+                  )}
+                </td>
+                <td style={{ ...tdStyle, fontSize: 12, color: 'var(--color-text-secondary)' }}>
+                  {cronToLabel(task.schedule)}
+                </td>
+                <td style={tdStyle}>
+                  <span style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 5,
+                    maxWidth: '100%',
+                    fontSize: 11, fontWeight: 650,
+                    padding: '2px 7px',
+                    borderRadius: 5,
+                    background: task.agentName ? 'rgba(99,102,241,0.12)' : 'var(--color-bg-surface-highest)',
+                    color: task.agentName ? 'var(--color-accent-primary)' : 'var(--color-text-muted)',
+                  }}>
+                    <Bot size={11} />
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {task.agentName || '默认 Agent'}
+                    </span>
+                  </span>
+                </td>
+                <td style={tdStyle}>
+                  {skillNames.length > 0 ? (
+                    <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+                      {skillNames.slice(0, 3).map(skill => (
+                        <span key={skill} style={{
+                          fontSize: 10, fontWeight: 650, padding: '2px 6px', borderRadius: 4,
+                          background: 'rgba(245,158,11,0.12)', color: 'var(--color-accent-primary)',
+                        }}>
+                          {skill}
+                        </span>
+                      ))}
+                      {skillNames.length > 3 && (
+                        <span style={{ fontSize: 10, color: 'var(--color-text-muted)' }}>+{skillNames.length - 3}</span>
+                      )}
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: 12, color: 'var(--color-text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {task.description || task.prompt}
+                    </div>
+                  )}
+                </td>
+                <td style={{ ...tdStyle, textAlign: 'right' }}>
+                  <button onClick={e => { e.stopPropagation(); onEdit(task) }} style={iconButtonStyle} title="编辑">
+                    <Pencil size={13} />
+                  </button>
+                  <button onClick={e => { e.stopPropagation(); onDelete(task.id) }} style={{ ...iconButtonStyle, color: '#f87171' }} title="删除">
+                    <Trash2 size={13} />
+                  </button>
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+const thStyle: React.CSSProperties = {
+  padding: '10px 12px',
+  textAlign: 'left',
+  fontSize: 10,
+  fontWeight: 800,
+  color: 'var(--color-text-disabled)',
+  textTransform: 'uppercase',
+  letterSpacing: '0.06em',
+}
+
+const tdStyle: React.CSSProperties = {
+  padding: '12px',
+  verticalAlign: 'middle',
+}
+
+const iconButtonStyle: React.CSSProperties = {
+  width: 28,
+  height: 28,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  border: 'none',
+  borderRadius: 6,
+  background: 'transparent',
+  color: 'var(--color-text-muted)',
+  cursor: 'pointer',
 }
 
 // ── Live steps panel ──────────────────────────────────────────────────────────
@@ -644,30 +977,39 @@ interface InfoPanelProps {
 }
 
 function InfoPanel({ task, projectName, workspacePath }: InfoPanelProps) {
-  const [previewOpen, setPreviewOpen] = useState(false)
-  const [skillDesc, setSkillDesc] = useState<string>('')
-  const [skillRaw, setSkillRaw] = useState<string>('')
+  const skillNames = useMemo(() => getTaskSkillNames(task), [task.skillName, task.skillNames])
+  const skillNamesKey = skillNames.join('\n')
+  const [previewSkillName, setPreviewSkillName] = useState<string | null>(null)
+  const [skillDetails, setSkillDetails] = useState<Record<string, { description: string; raw: string }>>({})
 
   // Fetch skill metadata from API
   useEffect(() => {
-    if (!task.skillName) return
+    if (skillNames.length === 0) {
+      setSkillDetails({})
+      setPreviewSkillName(null)
+      return
+    }
     const url = workspacePath
       ? `/api/config/skills?workspacePath=${encodeURIComponent(workspacePath)}`
       : '/api/config/skills'
     fetch(url)
       .then(r => r.json())
       .then((d: { skills: Array<{ name: string; description: string; raw: string }> }) => {
-        const skill = d.skills?.find(s => s.name === task.skillName)
-        if (skill) {
-          setSkillDesc(skill.description)
-          setSkillRaw(skill.raw)
+        const selected = new Set(skillNames)
+        const next: Record<string, { description: string; raw: string }> = {}
+        for (const skill of d.skills ?? []) {
+          if (selected.has(skill.name)) next[skill.name] = { description: skill.description, raw: skill.raw }
         }
+        setSkillDetails(next)
       })
       .catch(() => {})
-  }, [task.skillName, workspacePath])
+  }, [skillNamesKey, workspacePath])
+
+  const previewRaw = previewSkillName ? skillDetails[previewSkillName]?.raw : ''
 
   const metaRows: [string, string][] = [
     ['执行频率', cronToLabel(task.schedule)],
+    ['执行 Agent', task.agentName || '默认 Agent'],
   ]
   if (projectName) metaRows.push(['项目', projectName])
   if (workspacePath) metaRows.push(['工作目录', workspacePath])
@@ -694,37 +1036,50 @@ function InfoPanel({ task, projectName, workspacePath }: InfoPanelProps) {
         </div>
       )}
 
-      {/* Skill card OR custom prompt */}
-      {task.skillName ? (
+      {/* Skill cards OR custom prompt */}
+      {skillNames.length > 0 ? (
         <div style={{ marginBottom: 18 }}>
-          <div style={fieldLbl}>Skill</div>
+          <div style={fieldLbl}>Skills</div>
           <div style={{
-            padding: '10px 14px', borderRadius: 8,
-            border: '1px solid var(--color-border-subtle)',
-            background: 'var(--color-bg-surface)',
+            display: 'flex', flexDirection: 'column', gap: 6,
           }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--color-text-primary)', marginBottom: 2 }}>
-                  {task.skillName}
-                </div>
-                {skillDesc && (
-                  <div style={{ fontSize: 11, color: 'var(--color-text-muted)', lineHeight: 1.4 }}>
-                    {skillDesc}
+            {skillNames.map(skillName => {
+              const detail = skillDetails[skillName]
+              return (
+                <div
+                  key={skillName}
+                  style={{
+                    padding: '10px 14px', borderRadius: 8,
+                    border: '1px solid var(--color-border-subtle)',
+                    background: 'var(--color-bg-surface)',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--color-text-primary)', marginBottom: 2 }}>
+                        {skillName}
+                      </div>
+                      {detail?.description && (
+                        <div style={{ fontSize: 11, color: 'var(--color-text-muted)', lineHeight: 1.4 }}>
+                          <SkillDescription text={detail.description} maxChars={96} />
+                        </div>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setPreviewSkillName(skillName)}
+                      style={{
+                        flexShrink: 0, fontSize: 11, padding: '2px 8px', borderRadius: 5, cursor: 'pointer',
+                        border: '1px solid var(--color-border-subtle)', background: 'transparent',
+                        color: 'var(--color-text-muted)',
+                      }}
+                    >
+                      预览 →
+                    </button>
                   </div>
-                )}
-              </div>
-              <button
-                onClick={() => setPreviewOpen(true)}
-                style={{
-                  flexShrink: 0, fontSize: 11, padding: '2px 8px', borderRadius: 5, cursor: 'pointer',
-                  border: '1px solid var(--color-border-subtle)', background: 'transparent',
-                  color: 'var(--color-text-muted)',
-                }}
-              >
-                预览 →
-              </button>
-            </div>
+                </div>
+              )
+            })}
           </div>
         </div>
       ) : (
@@ -749,14 +1104,14 @@ function InfoPanel({ task, projectName, workspacePath }: InfoPanelProps) {
       ))}
 
       {/* Skill frontmatter preview modal */}
-      {previewOpen && task.skillName && (
-        <div style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.5)' }}>
+      {previewSkillName && createPortal(
+        <div style={{ position: 'fixed', inset: 0, zIndex: 3000, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.5)' }}>
           <div style={{ background: 'var(--color-bg-surface)', borderRadius: 10, border: '1px solid var(--color-border-subtle)', padding: 24, width: '72vw', maxWidth: 900, maxHeight: '80vh', display: 'flex', flexDirection: 'column', boxShadow: '0 20px 60px rgba(0,0,0,0.4)' }}>
             <div style={{ display: 'flex', alignItems: 'center', marginBottom: 16 }}>
               <span style={{ flex: 1, fontSize: 14, fontWeight: 700, color: 'var(--color-text-primary)' }}>
-                {task.skillName}
+                {previewSkillName}
               </span>
-              <button onClick={() => setPreviewOpen(false)} style={{ padding: '3px 10px', borderRadius: 5, border: '1px solid var(--color-border-subtle)', background: 'transparent', cursor: 'pointer', fontSize: 12, color: 'var(--color-text-muted)' }}>
+              <button type="button" onClick={() => setPreviewSkillName(null)} style={{ padding: '3px 10px', borderRadius: 5, border: '1px solid var(--color-border-subtle)', background: 'transparent', cursor: 'pointer', fontSize: 12, color: 'var(--color-text-muted)' }}>
                 关闭
               </button>
             </div>
@@ -769,10 +1124,11 @@ function InfoPanel({ task, projectName, workspacePath }: InfoPanelProps) {
               fontFamily: "'SF Mono', 'Fira Code', Consolas, monospace",
               whiteSpace: 'pre', wordBreak: 'normal',
             }}>
-              {skillRaw || '（暂无数据）'}
+              {previewRaw || '（暂无数据）'}
             </pre>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   )
@@ -856,7 +1212,7 @@ interface DetailViewProps {
   workspacePath?: string
   onBack: () => void
   onTaskChange: (task: ScheduledTask) => void
-  onNavigateToSession: (sessionId: string, prompts?: { displayPrompt: string; effectivePrompt: string; execUpdateUrl?: string; enabledSkills?: string[] }) => void
+  onNavigateToSession: (sessionId: string, prompts?: { displayPrompt: string; effectivePrompt: string; execUpdateUrl?: string; agentName?: string; enabledSkills?: string[] }) => void
   onEdit: (task: ScheduledTask) => void
 }
 
@@ -912,6 +1268,7 @@ function DetailView({
             const data = JSON.parse(chunk.slice(6)) as {
               type: string; sessionId?: string; execId?: string
               displayPrompt?: string; effectivePrompt?: string
+              agentName?: string
               enabledSkills?: string[]
             }
             if (data.type === 'session_created' && data.sessionId) {
@@ -921,7 +1278,7 @@ function DetailView({
               onNavigateToSession(
                 data.sessionId,
                 data.displayPrompt && data.effectivePrompt
-                  ? { displayPrompt: data.displayPrompt, effectivePrompt: data.effectivePrompt, execUpdateUrl, enabledSkills: data.enabledSkills }
+                  ? { displayPrompt: data.displayPrompt, effectivePrompt: data.effectivePrompt, execUpdateUrl, agentName: data.agentName, enabledSkills: data.enabledSkills }
                   : undefined
               )
               return
@@ -1063,7 +1420,7 @@ interface SchedulePaneProps {
   defaultModel: string
   workspacePath?: string
   projectName?: string
-  onNavigateToSession: (sessionId: string, prompts?: { displayPrompt: string; effectivePrompt: string; execUpdateUrl?: string; enabledSkills?: string[] }) => void
+  onNavigateToSession: (sessionId: string, prompts?: { displayPrompt: string; effectivePrompt: string; execUpdateUrl?: string; agentName?: string; enabledSkills?: string[] }) => void
 }
 
 export function SchedulePane({ projectId, defaultModel, workspacePath, projectName, onNavigateToSession }: SchedulePaneProps) {
@@ -1120,7 +1477,7 @@ export function SchedulePane({ projectId, defaultModel, workspacePath, projectNa
 
   const handleNavigateToSession = useCallback((
     sessionId: string,
-    prompts?: { displayPrompt: string; effectivePrompt: string; execUpdateUrl?: string; enabledSkills?: string[] }
+    prompts?: { displayPrompt: string; effectivePrompt: string; execUpdateUrl?: string; agentName?: string; enabledSkills?: string[] }
   ) => {
     onNavigateToSession(sessionId, prompts)
   }, [onNavigateToSession])
@@ -1165,8 +1522,21 @@ export function SchedulePane({ projectId, defaultModel, workspacePath, projectNa
       }}>
         <Clock size={15} style={{ color: 'var(--color-text-muted)', marginRight: 8 }} />
         <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-text-primary)', flex: 1 }}>定时任务</span>
-        <span style={{ fontSize: 11, color: 'var(--color-text-disabled)', marginRight: 12 }}>
-          {tasks.filter(t => t.enabled).length} 个启用
+        <span style={{
+          display: 'inline-flex', alignItems: 'center', gap: 5,
+          fontSize: 11, fontWeight: 650,
+          color: tasks.some(t => t.enabled) ? 'var(--color-accent-success)' : 'var(--color-text-muted)',
+          background: tasks.some(t => t.enabled) ? 'rgba(50,213,131,0.12)' : 'var(--color-bg-surface-highest)',
+          border: '1px solid var(--color-border-subtle)',
+          borderRadius: 6,
+          padding: '3px 8px',
+          marginRight: 12,
+        }}>
+          <span style={{
+            width: 6, height: 6, borderRadius: '50%',
+            background: tasks.some(t => t.enabled) ? 'var(--color-accent-success)' : 'var(--color-text-disabled)',
+          }} />
+          {tasks.filter(t => t.enabled).length} enabled
         </span>
         <button onClick={openCreate} style={{
           display: 'flex', alignItems: 'center', gap: 5,
@@ -1230,19 +1600,13 @@ export function SchedulePane({ projectId, defaultModel, workspacePath, projectNa
             </div>
           </div>
         ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', gap: 14 }}>
-            {tasks.map(task => (
-              <TaskCard
-                key={task.id}
-                task={task}
-                projectId={projectId}
-                onToggle={handleToggle}
-                onEdit={openEdit}
-                onDelete={handleDelete}
-                onClick={t => { setSelectedTask(t); setView('detail') }}
-              />
-            ))}
-          </div>
+          <TaskTable
+            tasks={tasks}
+            onToggle={handleToggle}
+            onEdit={openEdit}
+            onDelete={handleDelete}
+            onClick={t => { setSelectedTask(t); setView('detail') }}
+          />
         )}
       </div>
 

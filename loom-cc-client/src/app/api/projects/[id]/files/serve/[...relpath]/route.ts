@@ -29,6 +29,7 @@ const MIME_MAP: Record<string, string> = {
   scss: 'text/plain; charset=utf-8',
   js: 'text/javascript; charset=utf-8',
   mjs: 'text/javascript; charset=utf-8',
+  cjs: 'text/javascript; charset=utf-8',
   ts: 'text/plain; charset=utf-8',
   tsx: 'text/plain; charset=utf-8',
   jsx: 'text/plain; charset=utf-8',

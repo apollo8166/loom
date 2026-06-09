@@ -8,7 +8,7 @@ import {
   Scissors, Eye, FileVideo,
 } from 'lucide-react'
 import { cn } from '@/shared/lib/utils'
-import type { Project, Session, ThinkingMode, TaskInfo, SdkContextUsage } from '@/shared/types'
+import type { Project, Session, ThinkingMode, TaskInfo } from '@/shared/types'
 import { useSessionChat } from '@/modules/sessions/use-session-chat'
 import {
   UserMessage, AssistantMessage, SessionBoundaryDivider,
@@ -19,6 +19,15 @@ import { FilePreviewPanel, type PreviewFile } from '@/components/chat/file-previ
 import { ClaudeCodeUsageStats } from '@/components/chat/claude-code-usage-stats'
 import { CaptureWindowOverlay } from '@/components/capture/capture-window-overlay'
 import { CaptureConfirmDialog } from '@/components/capture/capture-confirm-dialog'
+import type { ModelCatalogEntry } from '@/shared/config/models'
+import { mergeModelCatalog } from '@/shared/config/model-catalog'
+import {
+  CONTEXT_WINDOW_FALLBACK_SETTING_KEY,
+  DEFAULT_CONTEXT_WINDOW_TOKENS,
+  formatContextWindowTokens,
+  parseContextWindowFallback,
+  resolveContextWindowTokens,
+} from '@/shared/config/context-window'
 
 /* ── Types ── */
 
@@ -36,7 +45,7 @@ type CommandPanel =
   | { type: 'skills'; skills: { name: string; desc: string; source: 'builtin' | 'project' | 'global' }[] }
   | { type: 'agents'; running: { id: string; task: string }[]; library: { name: string; desc: string; source: string }[] }
   | { type: 'hooks'; events: { event: string; groups: { matcher: string; commands: string[] }[]; source: 'project' | 'global' }[] }
-  | { type: 'mcp'; servers: { name: string; transport: string; addr: string }[] }
+  | { type: 'mcp'; servers: { name: string; scope: string; transport: string; addr: string; overriddenBy?: string }[] }
   | { type: 'cost'; rows: { label: string; value: string; dim?: boolean }[] }
   | { type: 'help'; commands: SlashCmd[] }
 
@@ -56,9 +65,12 @@ type ProviderConfigBrief = {
   fastModel?: string
   mainModel?: string
   heavyModel?: string
+  fastContextWindowTokens?: number
+  mainContextWindowTokens?: number
+  heavyContextWindowTokens?: number
 }
 
-type WorkbenchModelEntry = { id: string; label: string; tier: 'fast' | 'main' | 'heavy'; actualModel?: string }
+type WorkbenchModelEntry = { id: string; label: string; tier: 'fast' | 'main' | 'heavy'; actualModel?: string; contextWindowTokens?: number }
 
 type PromptPreviewPart = {
   key: string
@@ -161,22 +173,39 @@ function basename(filePath: string | null | undefined): string {
   return filePath.split(/[\\/]/).filter(Boolean).pop() || filePath
 }
 
+function parseMcpScopeArg(parts: string[]): { scope: 'local' | 'project' | 'user'; rest: string[]; error?: string } {
+  const rest = [...parts]
+  let scope: 'local' | 'project' | 'user' = 'local'
+  const idx = rest.indexOf('--scope')
+  if (idx >= 0) {
+    const value = rest[idx + 1]
+    if (value !== 'local' && value !== 'project' && value !== 'user') {
+      return { scope, rest, error: '--scope 必须是 local / project / user' }
+    }
+    scope = value
+    rest.splice(idx, 2)
+  }
+  return { scope, rest }
+}
+
 const LOGICAL_MODELS: WorkbenchModelEntry[] = [
   { id: 'claude-haiku-4-5', label: '快速', tier: 'fast' },
   { id: 'claude-sonnet-4-6', label: '主力', tier: 'main' },
   { id: 'claude-opus-4-6', label: '强力', tier: 'heavy' },
 ]
 
-function buildLogicalModelOptions(config?: ProviderConfigBrief): WorkbenchModelEntry[] {
+function buildLogicalModelOptions(config?: ProviderConfigBrief, catalog: ModelCatalogEntry[] = []): WorkbenchModelEntry[] {
   return LOGICAL_MODELS.map(model => {
     const actualModel = model.tier === 'fast'
       ? config?.fastModel
       : model.tier === 'heavy'
         ? config?.heavyModel
         : config?.mainModel
+    const catalogEntry = catalog.find(entry => entry.id === actualModel)
     return {
       ...model,
       actualModel: actualModel?.trim() || undefined,
+      contextWindowTokens: catalogEntry?.contextWindowTokens,
     }
   })
 }
@@ -189,10 +218,11 @@ function normalizeStoredModel(modelId: string | null | undefined, config?: Provi
   return 'claude-sonnet-4-6'
 }
 
-const FALLBACK_CONTEXT_MAX_TOKENS = 1_000_000
-
-function formatContextMaxShort(tokens: number): string {
-  return tokens >= 1000 ? `${Math.round(tokens / 1000)}k` : String(tokens)
+function attachmentPlaceholder(att: Attachment) {
+  if (att.isImage) return `[Image #${att.num}]`
+  if (att.tier === 'pdf') return `[PDF #${att.num}]`
+  if (att.mimeType === 'video/mp4' || att.name.toLowerCase().endsWith('.mp4')) return `[Video #${att.num}]`
+  return `[File #${att.num}]`
 }
 
 function CompactIcon({ size = 14, strokeWidth = 2 }: { size?: number; strokeWidth?: number }) {
@@ -226,7 +256,7 @@ const SLASH_COMMANDS: SlashCmd[] = [
   { name: '/help',    args: '',                  desc: '查看可用命令列表',                   client: true  },
   { name: '/hooks',   args: '',                  desc: '管理 Claude Code Hooks 配置',        client: true  },
   { name: '/init',    args: '',                  desc: '初始化工作区 .claude/ 配置文件',     client: true  },
-  { name: '/mcp',     args: 'list|add|remove …', desc: '管理 MCP 服务器',                    client: true  },
+  { name: '/mcp',     args: 'list|add --scope …', desc: '管理 Claude MCP 服务器',             client: true  },
   { name: '/model',   args: '[name]',            desc: '切换模型',                           client: true  },
   { name: '/rename',  args: '<title>',           desc: '重命名当前会话',                     client: true  },
   { name: '/skills',  args: '',                  desc: '查看可用 Skills 技能列表',           client: true  },
@@ -257,6 +287,7 @@ interface WorkbenchViewProps {
   pendingAutoSend?: {
     sessionId: string; displayPrompt: string; effectivePrompt: string; execUpdateUrl?: string
     permissionMode?: string; thinkingMode?: string; planMode?: boolean
+    agentName?: string
     enabledSkills?: string[]
     attachments?: Array<{ name: string; filename: string; mimeType: string; tier: string; originalFilename?: string }>
   } | null
@@ -291,6 +322,7 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
   const [availableModels, setAvailableModels] = useState<WorkbenchModelEntry[]>(
     LOGICAL_MODELS
   )
+  const [contextWindowFallback, setContextWindowFallback] = useState(DEFAULT_CONTEXT_WINDOW_TOKENS)
 
   const [permOpen, setPermOpen] = useState(false)
   const [thinkOpen, setThinkOpen] = useState(false)
@@ -306,7 +338,6 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
   const [promptPreviewOpen, setPromptPreviewOpen] = useState(false)
   const [promptPreviewLoading, setPromptPreviewLoading] = useState(false)
   const [promptPreviewData, setPromptPreviewData] = useState<PromptPreviewData | null>(null)
-  const [sdkUsageOpen, setSdkUsageOpen] = useState(false)
   const notifTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const contextThresholdLoggedRef = useRef<string | null>(null)
 
@@ -339,6 +370,7 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
   const userScrolledUpRef = useRef(false)
   const prevMessageCountRef = useRef(0)
   const prevSessionIdRef = useRef<string | null>(null)
+  const pendingInitialScrollRef = useRef(false)
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
 
   // Load messages when session changes
@@ -358,14 +390,18 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
     Promise.all([
       fetch('/api/config/provider').then(r => r.json()).catch(() => ({ active: 'anthropic' })),
       fetch(`/api/projects/${project.id}/settings`).then(r => r.json()).catch(() => ({ settings: null })),
-    ]).then(([providerData, settingsData]) => {
+      fetch('/api/config/models').then(r => r.json()).catch(() => ({ catalogs: {} })),
+      fetch(`/api/config/settings?key=${CONTEXT_WINDOW_FALLBACK_SETTING_KEY}`).then(r => r.json()).catch(() => ({ value: null })),
+    ]).then(([providerData, settingsData, modelData, fallbackData]) => {
       const globalActive = providerData.active ?? 'anthropic'
       const projectOverride = settingsData.settings?.providerId ?? null
       const effectiveId: string = projectOverride ?? globalActive
       const providerConfig = (providerData.configs as ProviderConfigBrief[] | undefined)?.find(c => c.id === effectiveId)
+      const catalog = mergeModelCatalog(effectiveId, modelData.catalogs ?? {})
       setActiveProviderId(effectiveId)
       setActiveProviderConfig(providerConfig)
-      setAvailableModels(buildLogicalModelOptions(providerConfig))
+      setAvailableModels(buildLogicalModelOptions(providerConfig, catalog))
+      setContextWindowFallback(parseContextWindowFallback(fallbackData.value))
     })
   }, [project.id])
 
@@ -428,8 +464,21 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
     prevMessageCountRef.current = messages.length
 
     if (isSessionChange) {
-      scrollToBottom('auto')
+      pendingInitialScrollRef.current = Boolean(currentSessionId)
+      userScrolledUpRef.current = false
+      setShowScrollToBottom(false)
+      requestAnimationFrame(() => scrollToBottom('auto'))
       return
+    }
+
+    if (pendingInitialScrollRef.current && messages.length > 0) {
+      pendingInitialScrollRef.current = false
+      requestAnimationFrame(() => scrollToBottom('auto'))
+      return
+    }
+
+    if (pendingInitialScrollRef.current && !currentSessionId) {
+      pendingInitialScrollRef.current = false
     }
 
     if ((isNewMessage || streaming || isCompacting) && !userScrolledUpRef.current) {
@@ -571,35 +620,27 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
   // Context usage
   const lastGroup = groups[groups.length - 1]
   const activeMessages = lastGroup?.messages ?? messages
-  const sdkContextUsage = [...messages]
-    .reverse()
-    .find(m => m.role === 'assistant' && m.sdkContextUsage)?.sdkContextUsage as SdkContextUsage | null | undefined
-  const fallbackContextUsed = activeMessages.reduce(
-    (sum, message) => sum + (message.inputTokens || 0) + (message.outputTokens || 0),
-    0,
-  )
-  const hasSdkContextUsage = Boolean(sdkContextUsage && sdkContextUsage.totalTokens > 0 && sdkContextUsage.maxTokens > 0)
-  const contextUsed = hasSdkContextUsage ? sdkContextUsage!.totalTokens : fallbackContextUsed
-  const contextMax = hasSdkContextUsage ? sdkContextUsage!.maxTokens : FALLBACK_CONTEXT_MAX_TOKENS
-  const rawContextPct = hasSdkContextUsage && typeof sdkContextUsage?.percentage === 'number'
-    ? sdkContextUsage.percentage
-    : hasSdkContextUsage && contextUsed > 0 && contextMax > 0
-      ? (contextUsed / contextMax) * 100
-      : contextUsed > 0 && contextMax > 0
-        ? (contextUsed / contextMax) * 100
-        : 0
+  const contextInputTokens = activeMessages.reduce((sum, message) => sum + (message.inputTokens || 0), 0)
+  const contextOutputTokens = activeMessages.reduce((sum, message) => sum + (message.outputTokens || 0), 0)
+  const contextUsed = contextInputTokens + contextOutputTokens
+  const resolvedContextWindow = resolveContextWindowTokens({
+    logicalModel: selectedModel,
+    actualModel: selectedModelOption?.actualModel,
+    providerConfig: activeProviderConfig,
+    catalogContextWindowTokens: selectedModelOption?.contextWindowTokens,
+    fallbackTokens: contextWindowFallback,
+  })
+  const contextMax = resolvedContextWindow.tokens
+  const contextMaxLabel = formatContextWindowTokens(contextMax)
+  const rawContextPct = contextUsed > 0 && contextMax > 0 ? (contextUsed / contextMax) * 100 : 0
+  const boundedRawContextPct = Math.min(100, rawContextPct)
+  const contextPctLabel = boundedRawContextPct > 0 && boundedRawContextPct < 0.1
+    ? '<0.1%'
+    : `${boundedRawContextPct < 10 ? boundedRawContextPct.toFixed(1) : Math.round(boundedRawContextPct)}%`
   const contextPct = rawContextPct > 0 ? Math.max(1, Math.min(100, Math.round(rawContextPct))) : 0
-  const contextColor = hasSdkContextUsage && contextPct >= 90 ? '#ef4444' : hasSdkContextUsage && contextPct >= 75 ? '#f97316' : '#F59E0B'
-  const contextLevel = !hasSdkContextUsage ? 'normal' : contextPct >= 90 ? 'block' : contextPct >= 85 ? 'suggest' : contextPct >= 75 ? 'strong' : contextPct >= 60 ? 'soft' : 'normal'
-  const compactStrategy = !hasSdkContextUsage ? null : contextPct >= 90
-    ? { level: 'block' as const, label: '上下文接近上限，建议先 /compact', color: '#ef4444' }
-    : contextPct >= 85
-      ? { level: 'suggest' as const, label: '建议现在压缩上下文', color: '#f97316' }
-      : contextPct >= 75
-        ? { level: 'strong' as const, label: '上下文偏高', color: '#f97316' }
-        : contextPct >= 60
-          ? { level: 'soft' as const, label: '上下文增长中', color: '#F59E0B' }
-          : null
+  const contextColor = contextPct >= 90 ? '#ef4444' : contextPct >= 75 ? '#f97316' : '#F59E0B'
+  const contextLevel = contextPct >= 90 ? 'block' : contextPct >= 85 ? 'suggest' : contextPct >= 75 ? 'strong' : contextPct >= 60 ? 'soft' : 'normal'
+  const contextUsageTitle = `当前上下文累计：${contextUsed.toLocaleString()} / ${contextMax.toLocaleString()} tokens（${contextPctLabel}，输入 ${contextInputTokens.toLocaleString()} / 输出 ${contextOutputTokens.toLocaleString()}；窗口模型 ${resolvedContextWindow.modelId || selectedModel}）`
 
   // Unified active mode: Plan overrides permissionMode
   const activeMode = planMode ? 'plan' : permissionMode
@@ -632,19 +673,18 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
         contextPct,
         contextUsed,
         contextMax,
+        contextWindowSource: resolvedContextWindow.source,
+        contextWindowModel: resolvedContextWindow.modelId,
         contextVersion,
         sessionId: session?.id,
         projectId: project.id,
       }),
     }).catch(() => {})
-  }, [contextLevel, contextPct, contextUsed, contextMax, lastGroup?.contextVersion, session?.id, project.id])
+  }, [contextLevel, contextPct, contextUsed, contextMax, resolvedContextWindow.source, resolvedContextWindow.modelId, lastGroup?.contextVersion, session?.id, project.id])
 
   // Attachment helpers
   const getPlaceholder = useCallback((att: Attachment) => {
-    if (att.isImage) return `[Image #${att.num}]`
-    if (att.tier === 'pdf') return `[PDF #${att.num}]`
-    if (att.mimeType === 'video/mp4' || att.name.toLowerCase().endsWith('.mp4')) return `[Video #${att.num}]`
-    return `[File #${att.num}]`
+    return attachmentPlaceholder(att)
   }, [])
 
   const openPromptPreview = useCallback(async () => {
@@ -1047,30 +1087,41 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
       const parts = args.trim().split(/\s+/).filter(Boolean)
       const sub = parts[0]?.toLowerCase()
       if (!sub || sub === 'list') {
-        fetch('/api/config/mcp').then(r => r.json()).then((data: { servers: { name: string; config: { type: string; url?: string; command?: string } }[] }) => {
-          setCommandPanel({ type: 'mcp', servers: (data.servers ?? []).map(s => ({ name: s.name, transport: s.config.type, addr: s.config.url ?? s.config.command ?? '' })) })
+        fetch(`/api/config/mcp?workspacePath=${encodeURIComponent(effectiveWorkspacePath || '')}`).then(r => r.json()).then((data: { servers: { name: string; scope: string; overriddenBy?: string; config: { type?: string; url?: string; command?: string; args?: string[] } }[] }) => {
+          setCommandPanel({
+            type: 'mcp',
+            servers: (data.servers ?? []).map(s => ({
+              name: s.name,
+              scope: s.scope,
+              overriddenBy: s.overriddenBy,
+              transport: s.config.type || 'stdio',
+              addr: s.config.url ?? [s.config.command, ...(s.config.args || [])].filter(Boolean).join(' '),
+            })),
+          })
         }).catch(() => showNotification('获取 MCP 列表失败'))
         return
       }
       if (sub === 'add') {
         const addArgs = parts.slice(1)
-        if (addArgs.length < 2) { showNotification('用法：/mcp add [--transport http|sse|stdio] <名称> <url 或 命令>'); return }
-        fetch('/api/config/mcp', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ args: addArgs }) })
-          .then(r => r.json()).then((data: { ok?: boolean; name?: string; config?: { type: string }; error?: string }) => {
-            showNotification(data.ok ? `✅ MCP 服务器 "${data.name}" 已添加 [${data.config?.type}]` : `❌ 添加失败：${data.error}`)
+        if (addArgs.length < 2) { showNotification('用法：/mcp add [--scope local|project|user] [--transport http|sse|stdio] <名称> <url 或 命令>'); return }
+        fetch('/api/config/mcp', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ args: addArgs, workspacePath: effectiveWorkspacePath || '' }) })
+          .then(r => r.json()).then((data: { ok?: boolean; name?: string; scope?: string; config?: { type?: string }; error?: string }) => {
+            showNotification(data.ok ? `✅ MCP 服务器 "${data.name}" 已添加到 ${data.scope} [${data.config?.type || 'stdio'}]` : `❌ 添加失败：${data.error}`)
           }).catch(() => showNotification('添加 MCP 服务器失败'))
         return
       }
       if (sub === 'remove' || sub === 'rm') {
-        const name = parts[1]
-        if (!name) { showNotification('用法：/mcp remove <名称>'); return }
-        fetch('/api/config/mcp', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) })
-          .then(r => r.json()).then((data: { ok?: boolean; error?: string }) => {
-            showNotification(data.ok ? `✅ MCP 服务器 "${name}" 已移除` : `❌ 移除失败：${data.error}`)
+        const parsed = parseMcpScopeArg(parts.slice(1))
+        if (parsed.error) { showNotification(parsed.error); return }
+        const name = parsed.rest[0]
+        if (!name) { showNotification('用法：/mcp remove [--scope local|project|user] <名称>'); return }
+        fetch('/api/config/mcp', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, scope: parsed.scope, workspacePath: effectiveWorkspacePath || '' }) })
+          .then(r => r.json()).then((data: { ok?: boolean; scope?: string; error?: string }) => {
+            showNotification(data.ok ? `✅ MCP 服务器 "${name}" 已从 ${data.scope} 移除` : `❌ 移除失败：${data.error}`)
           }).catch(() => showNotification('移除 MCP 服务器失败'))
         return
       }
-      showNotification('用法：/mcp list | /mcp add … | /mcp remove <名称>')
+      showNotification('用法：/mcp list | /mcp add … | /mcp remove [--scope local|project|user] <名称>')
       return
     }
     // Send to AI
@@ -1276,22 +1327,29 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
   const renderBoundaryStats = (boundary: NonNullable<typeof groups[number]['boundary']>) => {
     if (boundary.boundaryType !== 'compact') return null
     const loomMeta = boundary.metadata?.loom as Record<string, unknown> | undefined
-    const tokenStats = loomMeta?.tokenStats as Record<string, unknown> | undefined
+    const messageCount = typeof loomMeta?.messageCount === 'number' ? loomMeta.messageCount : null
+    const rowCount = typeof loomMeta?.rowCount === 'number' ? loomMeta.rowCount : null
+    const messageChars = typeof loomMeta?.messageChars === 'number' ? loomMeta.messageChars : null
+    const summaryChars = typeof loomMeta?.summaryChars === 'number' ? loomMeta.summaryChars : null
     const preTokens = typeof boundary.metadata?.pre_tokens === 'number' ? boundary.metadata.pre_tokens : null
     const postTokens = typeof boundary.metadata?.post_tokens === 'number' ? boundary.metadata.post_tokens : null
-    const totalTokens = preTokens ?? (typeof tokenStats?.totalTokens === 'number' ? tokenStats.totalTokens : null)
-    const messageCount = typeof loomMeta?.messageCount === 'number' ? loomMeta.messageCount : null
-    const summaryChars = typeof loomMeta?.summaryChars === 'number' ? loomMeta.summaryChars : null
+    const sdkTokenPair = preTokens !== null && postTokens !== null && postTokens > 0 && postTokens <= preTokens
+      ? `SDK ${preTokens.toLocaleString()} -> ${postTokens.toLocaleString()} tokens`
+      : null
+    const summaryRatio = messageChars && summaryChars && messageChars > 0
+      ? Math.round((summaryChars / messageChars) * 100)
+      : null
     const trigger = typeof boundary.metadata?.trigger === 'string' ? boundary.metadata.trigger : null
     const source = boundary.compactSource === 'sdk'
       ? `SDK ${trigger === 'auto' ? 'auto ' : ''}compact`
       : 'Loom fallback'
     const chips = [
       source,
-      totalTokens !== null ? `压缩前 ${totalTokens.toLocaleString()} tokens` : null,
-      postTokens !== null ? `压缩后 ${postTokens.toLocaleString()} tokens` : null,
-      messageCount !== null ? `${messageCount} 条消息` : null,
+      sdkTokenPair,
+      messageCount !== null ? `${messageCount} 条消息` : rowCount !== null ? `${rowCount} 条记录` : null,
+      messageChars !== null ? `原文 ${messageChars.toLocaleString()} chars` : null,
       summaryChars !== null ? `摘要 ${summaryChars.toLocaleString()} chars` : null,
+      summaryRatio !== null ? `摘要约 ${summaryRatio}%` : null,
     ].filter((chip): chip is string => Boolean(chip))
     if (chips.length === 0) return null
     return (
@@ -1392,8 +1450,9 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
             ? <p style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>暂无配置的 MCP 服务器</p>
             : <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <tbody>{commandPanel.servers.map(s => (
-                  <tr key={s.name} style={{ borderBottom: '1px solid var(--color-border-subtle)' }}>
+                  <tr key={`${s.scope}-${s.name}`} style={{ borderBottom: '1px solid var(--color-border-subtle)' }}>
                     <td style={{ padding: '7px 0', width: 140, fontSize: 12, fontFamily: 'monospace', color: 'var(--color-text-secondary)', fontWeight: 700 }}>{s.name}</td>
+                    <td style={{ padding: '7px 8px', width: 78, fontSize: 11, color: 'var(--color-text-muted)' }}>{s.overriddenBy ? `${s.scope}→${s.overriddenBy}` : s.scope}</td>
                     <td style={{ padding: '7px 8px', width: 70, fontSize: 11, color: 'var(--color-accent-primary)' }}>{s.transport}</td>
                     <td style={{ padding: '7px 8px', fontSize: 11, fontFamily: 'monospace', color: 'var(--color-text-muted)', wordBreak: 'break-all' }}>{s.addr}</td>
                   </tr>
@@ -1411,75 +1470,6 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
             ))}
           </div>
         )}
-      </div>
-    )
-  }
-
-  const renderSdkUsagePopover = () => {
-    if (!sdkContextUsage || !sdkUsageOpen) return null
-    const rows: Array<{ label: string; value: string; group: string }> = []
-    for (const category of sdkContextUsage.categories || []) {
-      rows.push({ group: '分类', label: category.name, value: `${category.tokens.toLocaleString()} tokens` })
-    }
-    for (const file of sdkContextUsage.memoryFiles || []) {
-      rows.push({ group: 'Memory', label: file.path, value: `${file.tokens.toLocaleString()} tokens` })
-    }
-    if (sdkContextUsage.skills) {
-      rows.push({
-        group: 'Skills',
-        label: `${sdkContextUsage.skills.includedSkills}/${sdkContextUsage.skills.totalSkills} 个技能`,
-        value: `${sdkContextUsage.skills.tokens.toLocaleString()} tokens`,
-      })
-    }
-    for (const tool of sdkContextUsage.systemTools || []) {
-      rows.push({ group: '工具', label: tool.name, value: `${tool.tokens.toLocaleString()} tokens` })
-    }
-    for (const tool of sdkContextUsage.mcpTools || []) {
-      rows.push({ group: 'MCP', label: `${tool.serverName}/${tool.name}`, value: `${tool.tokens.toLocaleString()} tokens` })
-    }
-
-    return (
-      <div style={{
-        position: 'absolute',
-        bottom: 'calc(100% + 10px)',
-        left: '50%',
-        transform: 'translateX(-50%)',
-        zIndex: 80,
-        width: 560,
-        maxWidth: 'min(560px, calc(100vw - 48px))',
-        borderRadius: 12,
-        border: '1px solid var(--theme-border-strong)',
-        background: 'var(--theme-bg-surface)',
-        boxShadow: 'var(--theme-shadow-popover)',
-        padding: 12,
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-          <span style={{ fontSize: 11, fontWeight: 800, color: 'var(--color-text-primary)' }}>SDK 真实上下文组成</span>
-          <span style={{ fontSize: 10, color: 'var(--color-text-muted)' }}>
-            {contextUsed.toLocaleString()} / {contextMax.toLocaleString()} tokens
-          </span>
-        </div>
-        {rows.length > 0 ? (
-          <div style={{ maxHeight: 280, overflow: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
-              <tbody>
-                {rows.slice(0, 28).map((row, idx) => (
-                  <tr key={`${row.group}-${row.label}-${idx}`} style={{ borderTop: idx === 0 ? 'none' : '1px solid var(--color-border-subtle)' }}>
-                    <td style={{ width: 66, padding: '7px 8px 7px 0', fontSize: 10, color: 'var(--color-text-disabled)', whiteSpace: 'nowrap' }}>{row.group}</td>
-                    <td style={{ padding: '7px 8px 7px 0', fontSize: 11, color: 'var(--color-text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={row.label}>{row.label}</td>
-                    <td style={{ width: 116, padding: '7px 0', fontSize: 11, color: 'var(--color-accent-primary)', textAlign: 'right', whiteSpace: 'nowrap', fontFamily: 'monospace' }}>{row.value}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <div style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>SDK 没有返回可展开的上下文明细。</div>
-        )}
-        <div style={{ marginTop: 8, fontSize: 10, color: 'var(--color-text-muted)' }}>
-          Auto compact：{sdkContextUsage.isAutoCompactEnabled ? '已启用' : '未启用'}
-          {typeof sdkContextUsage.autoCompactThreshold === 'number' ? ` · 阈值 ${Math.round(sdkContextUsage.autoCompactThreshold * 100)}%` : ''}
-        </div>
       </div>
     )
   }
@@ -1509,6 +1499,7 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
         description: pendingAutoSend.displayPrompt,
         status: 'running',
         subagentType: 'Scheduled',
+        taskType: pendingAutoSend.agentName ? `Agent: ${pendingAutoSend.agentName}` : undefined,
         startedAt: Date.now(),
       })
     }
@@ -1522,6 +1513,7 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
       pendingAutoSend.displayPrompt,
       false,
       pendingAutoSend.enabledSkills,
+      pendingAutoSend.agentName,
     )
   }, [pendingAutoSend, session?.id, streaming, sendMessage, onPendingAutoSendConsumed])
 
@@ -1686,8 +1678,9 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
               <div key={`group-${gi}`}>
                 {group.messages.map((msg, i) => {
                   const flatIdx = messageRenderIndexById.get(msg.id) ?? -1
+                  const renderKey = `${msg.id}-${gi}-${i}`
                   return (
-                    <div key={msg.id} style={{ marginBottom: 32 }}>
+                    <div key={renderKey} style={{ marginBottom: 32 }}>
                       {msg.role === 'user' ? (
                         <UserMessage blocks={msg.blocks} fallbackContent={msg.content} onPreviewFile={setPreviewFile} />
                       ) : (
@@ -1699,6 +1692,7 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
                             thinkingMode={thinkingMode}
                             onPermissionDecision={sendPermissionDecision}
                             onAskUserQuestionResponse={sendAskUserQuestionResponse}
+                            onPreviewFile={setPreviewFile}
                             elapsedSeconds={msg.elapsedSeconds}
                             inputTokens={msg.inputTokens}
                             outputTokens={msg.outputTokens}
@@ -1878,8 +1872,9 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
                     ? <p style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>暂无配置的 MCP 服务器</p>
                     : <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                         <tbody>{commandPanel.servers.map(s => (
-                          <tr key={s.name} style={{ borderBottom: '1px solid var(--color-border-subtle)' }}>
+                          <tr key={`${s.scope}-${s.name}`} style={{ borderBottom: '1px solid var(--color-border-subtle)' }}>
                             <td style={{ padding: '6px 0', width: 140 }}><span style={{ fontSize: 12, fontFamily: 'monospace', color: 'var(--color-text-secondary)', fontWeight: 600 }}>{s.name}</span></td>
+                            <td style={{ padding: '6px 8px', width: 84 }}><span style={{ fontSize: 10, color: 'var(--color-text-muted)' }}>{s.overriddenBy ? `${s.scope}→${s.overriddenBy}` : s.scope}</span></td>
                             <td style={{ padding: '6px 8px', width: 70 }}><span style={{ fontSize: 10, color: 'var(--color-accent-primary)', background: 'rgba(245,158,11,0.12)', borderRadius: 3, padding: '2px 6px' }}>{s.transport}</span></td>
                             <td style={{ padding: '6px 8px', fontSize: 11, fontFamily: 'monospace', color: 'var(--color-text-muted)', wordBreak: 'break-all' }}>{s.addr}</td>
                           </tr>
@@ -2441,14 +2436,8 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, justifyContent: 'center', position: 'relative' }}>
                 {contextUsed > 0 && (
                   <div
-                    onClick={() => { if (hasSdkContextUsage) setSdkUsageOpen(open => !open) }}
-                    onMouseEnter={() => { if (hasSdkContextUsage) setSdkUsageOpen(true) }}
-                    onMouseLeave={() => { if (hasSdkContextUsage) setSdkUsageOpen(false) }}
-                    style={{ display: 'flex', alignItems: 'center', gap: 6, border: 'none', background: 'transparent', padding: 0, cursor: hasSdkContextUsage ? 'help' : 'default' }}
-                    title={hasSdkContextUsage
-                      ? `SDK Context: ${contextUsed.toLocaleString()} / ${contextMax.toLocaleString()} tokens${sdkContextUsage?.isAutoCompactEnabled ? ' · Auto compact on' : ''}`
-                      : `当前上下文已记录：${contextUsed.toLocaleString()} / ${contextMax.toLocaleString()} tokens`
-                    }
+                    style={{ display: 'flex', alignItems: 'center', gap: 6, border: 'none', background: 'transparent', padding: 0 }}
+                    title={contextUsageTitle}
                   >
                     <div style={{ display: 'flex', gap: 3, alignItems: 'center' }}>
                       {Array.from({ length: 10 }, (_, i) => (
@@ -2466,23 +2455,9 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
                       ))}
                     </div>
                     <span style={{ fontSize: 11, color: contextPct >= 75 ? contextColor : '#a08e7a', lineHeight: 1, whiteSpace: 'nowrap' }}>
-                      {contextPct}% <span style={{ color: '#6b5a47' }}>of {formatContextMaxShort(contextMax)} tokens</span>
+                      {contextPctLabel} <span style={{ color: '#6b5a47' }}>of {contextMaxLabel} tokens</span>
                     </span>
-                    {renderSdkUsagePopover()}
                   </div>
-                )}
-                {compactStrategy && (
-                  <span style={{
-                    fontSize: 10,
-                    color: compactStrategy.color,
-                    padding: '2px 6px',
-                    borderRadius: 999,
-                    border: `1px solid ${compactStrategy.color}40`,
-                    background: `${compactStrategy.color}10`,
-                    whiteSpace: 'nowrap',
-                  }}>
-                    {compactStrategy.label}
-                  </span>
                 )}
                 {contextPct >= 60 && (
                   <button
@@ -2563,7 +2538,14 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
                         const Icon = MODEL_ICONS[m.id] || Bot
                         const active = selectedModel === m.id
                         const modelName = m.label
-                        const version = m.actualModel || '由全局 Settings 实时解析'
+                        const modelWindow = resolveContextWindowTokens({
+                          logicalModel: m.id,
+                          actualModel: m.actualModel,
+                          providerConfig: activeProviderConfig,
+                          catalogContextWindowTokens: m.contextWindowTokens,
+                          fallbackTokens: contextWindowFallback,
+                        })
+                        const version = `${m.actualModel || '由全局 Settings 实时解析'} · ${formatContextWindowTokens(modelWindow.tokens)}`
                         return (
                           <button
                             key={m.id}

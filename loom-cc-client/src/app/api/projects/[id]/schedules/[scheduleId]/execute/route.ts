@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server'
 import crypto from 'crypto'
 import { getDb } from '@/shared/db/db'
+import { parseTaskSkillNames } from '@/shared/runtime/cron/task-skills'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -27,7 +28,7 @@ export async function POST(
     'SELECT * FROM scheduled_tasks WHERE id = ? AND project_id = ?'
   ).get(scheduleId, id) as {
     id: string; project_id: string; name: string
-    description: string; prompt: string; skill_name: string; model: string
+    description: string; prompt: string; agent_name: string; skill_name: string; model: string
   } | undefined
 
   if (!taskRow) {
@@ -60,21 +61,21 @@ export async function POST(
      VALUES (?, ?, ?, ?, ?, 'active')`
   ).run(sessionId, taskRow.project_id, sessionTitle, model, runtimeSessionId)
 
-  const hasSkill = !!(taskRow.skill_name && taskRow.prompt)
+  const skillNames = parseTaskSkillNames(taskRow.skill_name)
+  const hasSkill = skillNames.length > 0
+  const agentName = taskRow.agent_name?.trim() || ''
 
   // displayPrompt: shown in chat UI — always the task description (human-readable)
   const displayPrompt = taskRow.description?.trim()
     || (hasSkill ? taskRow.name : taskRow.prompt?.trim())
     || taskRow.name
 
-  // effectivePrompt: sent to SDK. For skill tasks, keep the native slash-style
-  // invocation; WorkbenchView will pass the skill name separately via options.skills.
+  // effectivePrompt: sent to SDK. Multi-skill tasks pass selected skills through
+  // options.skills instead of building multiple slash commands.
   const taskDesc = taskRow.description?.trim()
     || (!hasSkill ? taskRow.prompt?.trim() : '')
     || ''
-  const effectivePrompt = hasSkill
-    ? `/${taskRow.skill_name.trim()} ${taskDesc}`.trim()
-    : taskDesc
+  const effectivePrompt = taskDesc || taskRow.name
 
   // Record execution immediately so it appears in history
   const execId = crypto.randomUUID()
@@ -94,7 +95,8 @@ export async function POST(
       execId,
       displayPrompt,
       effectivePrompt,
-      enabledSkills: hasSkill ? [taskRow.skill_name.trim()] : undefined,
+      agentName: agentName || undefined,
+      enabledSkills: hasSkill ? skillNames : undefined,
     })}\n\n`,
     {
       headers: {

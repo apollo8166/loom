@@ -59,6 +59,41 @@ export interface RuleSummary {
   staleScore?: number
 }
 
+export interface DossierSummary {
+  id: string
+  version: number
+  summary: string
+  stableRules: string
+  recentRisks: string
+  repeatedIssues: string
+  deprecatedUnderstanding: string
+  nextSteps: string
+}
+
+export interface SemanticMemorySummary {
+  id: string
+  title: string
+  content: string
+  category: string
+  status: SemanticMemoryStatus
+  confidence: number
+  strength: number
+  occurrences: number
+  sourceObservationIds: string[]
+  staleScore: number
+}
+
+export interface ObservationSummary {
+  id: string
+  observationKey: string
+  category: string
+  content: string
+  confidence: number
+  status: ObservationStatus
+  sourceTrigger: string
+  createdAt: string
+}
+
 export interface RuleMetrics {
   appliedCount: number
   successCount: number
@@ -82,6 +117,9 @@ export interface EvolutionPacket {
   snippets: MessageSnippet[]
   candidate?: MemoryCandidate
   relatedMemories: MemorySummary[]
+  projectDossier?: DossierSummary | null
+  semanticMemories: SemanticMemorySummary[]
+  recentObservations: ObservationSummary[]
   activeRules: RuleSummary[]
   shadowRules: RuleSummary[]
   metrics?: RuleMetrics

@@ -7,6 +7,7 @@ export function useProjectSessions(projectId: string | null, sessionsEndpoint?: 
   const [sessions, setSessions] = useState<Session[]>([])
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const [runningSessionIds, setRunningSessionIds] = useState<Set<string>>(new Set())
 
   const fetchSessions = useCallback(async () => {
     if (!projectId) {
@@ -37,6 +38,55 @@ export function useProjectSessions(projectId: string | null, sessionsEndpoint?: 
   useEffect(() => {
     fetchSessions()
   }, [fetchSessions])
+
+  useEffect(() => {
+    if (!projectId) {
+      setRunningSessionIds(new Set())
+      return
+    }
+    let cancelled = false
+    fetch(`/api/projects/${projectId}/active-runs`)
+      .then(res => res.json())
+      .then((data: { sessions?: Array<{ sessionId?: string }> }) => {
+        if (cancelled) return
+        setRunningSessionIds(new Set((data.sessions ?? [])
+          .map(item => item.sessionId)
+          .filter((id): id is string => typeof id === 'string' && id.length > 0)))
+      })
+      .catch(() => {
+        if (!cancelled) setRunningSessionIds(new Set())
+      })
+    return () => { cancelled = true }
+  }, [projectId])
+
+  useEffect(() => {
+    if (!projectId) return
+    const source = new EventSource(`/api/projects/${projectId}/events`)
+    const seenEventIds = new Set<number>()
+    source.onmessage = event => {
+      let data: Record<string, unknown>
+      try {
+        data = JSON.parse(event.data) as Record<string, unknown>
+      } catch {
+        return
+      }
+      const eventId = Number(data.eventId || 0)
+      if (eventId > 0) {
+        if (seenEventIds.has(eventId)) return
+        seenEventIds.add(eventId)
+      }
+      if (data.type !== 'session_run_started' && data.type !== 'session_run_finished') return
+      const sessionId = data.sessionId
+      if (typeof sessionId !== 'string' || !sessionId) return
+      setRunningSessionIds(prev => {
+        const next = new Set(prev)
+        if (data.type === 'session_run_started') next.add(sessionId)
+        else next.delete(sessionId)
+        return next
+      })
+    }
+    return () => source.close()
+  }, [projectId])
 
   // Poll every 15 s so sessions created by the cron engine appear automatically
   useEffect(() => {
@@ -73,6 +123,16 @@ export function useProjectSessions(projectId: string | null, sessionsEndpoint?: 
 
   const selectSession = useCallback((sessionId: string) => {
     setActiveSessionId(sessionId)
+  }, [])
+
+  const upsertLocalSession = useCallback((session: Session) => {
+    setSessions(prev => {
+      const next = [session, ...prev.filter(s => s.id !== session.id)]
+      return next.sort((a, b) =>
+        String(b.lastMessageAt || b.createdAt).localeCompare(String(a.lastMessageAt || a.createdAt)),
+      )
+    })
+    setActiveSessionId(session.id)
   }, [])
 
   const updateSession = useCallback(async (
@@ -114,9 +174,11 @@ export function useProjectSessions(projectId: string | null, sessionsEndpoint?: 
     sessions,
     activeSession,
     activeSessionId,
+    runningSessionIds,
     loading,
     createSession,
     selectSession,
+    upsertLocalSession,
     updateSession,
     deleteSession,
     refetch: fetchSessions,

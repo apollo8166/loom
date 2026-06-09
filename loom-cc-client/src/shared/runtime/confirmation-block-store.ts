@@ -126,25 +126,37 @@ export class ConfirmationDraftStore {
     return assistantMessageId
   }
 
-  savePartial(baseBlocks: Record<string, unknown>[]): string | null {
+  savePartial(baseBlocks: Record<string, unknown>[], stats: FinalMessageStats = {}): string | null {
     const finalBlocks = mergeConfirmationBlocks(baseBlocks, this.confirmationBlocks)
     if (finalBlocks.length === 0) return null
 
     const assistantMessageId = this.assistantMessageId ?? crypto.randomUUID()
     if (this.assistantMessageId) {
-      this.db.prepare('UPDATE messages SET content = ? WHERE id = ?').run(
+      this.db.prepare(
+        `UPDATE messages
+         SET content = ?, elapsed_seconds = ?, input_tokens = ?, output_tokens = ?
+         WHERE id = ?`,
+      ).run(
         JSON.stringify(finalBlocks),
+        stats.elapsedSeconds ?? 0,
+        stats.inputTokens ?? 0,
+        stats.outputTokens ?? 0,
         assistantMessageId,
       )
     } else {
       this.db.prepare(
-        'INSERT INTO messages (id, session_id, context_version, role, content) VALUES (?, ?, ?, ?, ?)',
+        `INSERT INTO messages
+          (id, session_id, context_version, role, content, elapsed_seconds, input_tokens, output_tokens)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         assistantMessageId,
         this.sessionId,
         this.contextVersion,
         'assistant',
         JSON.stringify(finalBlocks),
+        stats.elapsedSeconds ?? 0,
+        stats.inputTokens ?? 0,
+        stats.outputTokens ?? 0,
       )
       this.assistantMessageId = assistantMessageId
     }

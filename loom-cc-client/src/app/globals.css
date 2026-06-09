@@ -105,6 +105,21 @@ body {
   }
 }
 
+.session-running-dot {
+  animation: sessionRunningPulse 1.4s ease-in-out infinite;
+}
+
+@keyframes sessionRunningPulse {
+  0%, 100% {
+    opacity: 0.55;
+    transform: scale(0.9);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+}
+
 /* ── Compact progress: context folding motion ─────────────────────── */
 .compact-fold-card {
   width: min(360px, 100%);

@@ -1,8 +1,20 @@
 import path from 'node:path'
 import { readClaudeMemory } from '@/shared/memory/files'
 import type { MemoryCandidate } from '@/shared/memory/types'
+import { cleanProjectDossier, getLatestProjectDossier } from './dossier-store'
+import { listRecentObservations } from './observation-store'
+import { listSemanticMemories } from './semantic-memory-store'
 import { listProjectRules } from './rule-store'
-import type { EvolutionPacket, EvolutionTrigger, MemorySummary, MessageSnippet, RuleSummary } from './types'
+import type {
+  DossierSummary,
+  EvolutionPacket,
+  EvolutionTrigger,
+  MemorySummary,
+  MessageSnippet,
+  ObservationSummary,
+  RuleSummary,
+  SemanticMemorySummary,
+} from './types'
 
 function textPreview(value: string, max = 360): string {
   return value.replace(/\s+/g, ' ').trim().slice(0, max)
@@ -41,6 +53,47 @@ function toRuleSummary(rule: ReturnType<typeof listProjectRules>[number]): RuleS
   }
 }
 
+function toDossierSummary(dossier: NonNullable<ReturnType<typeof getLatestProjectDossier>>): DossierSummary {
+  return {
+    id: dossier.id,
+    version: dossier.version,
+    summary: textPreview(dossier.summary, 1200),
+    stableRules: textPreview(dossier.stableRules, 1200),
+    recentRisks: textPreview(dossier.recentRisks, 1000),
+    repeatedIssues: textPreview(dossier.repeatedIssues, 1000),
+    deprecatedUnderstanding: textPreview(dossier.deprecatedUnderstanding, 1000),
+    nextSteps: textPreview(dossier.nextSteps, 800),
+  }
+}
+
+function toSemanticSummary(memory: ReturnType<typeof listSemanticMemories>[number]): SemanticMemorySummary {
+  return {
+    id: memory.id,
+    title: textPreview(memory.title, 160),
+    content: textPreview(memory.content, 520),
+    category: memory.category,
+    status: memory.status,
+    confidence: memory.confidence,
+    strength: memory.strength,
+    occurrences: memory.occurrences,
+    sourceObservationIds: memory.sourceObservationIds.slice(0, 12),
+    staleScore: memory.staleScore,
+  }
+}
+
+function toObservationSummary(observation: ReturnType<typeof listRecentObservations>[number]): ObservationSummary {
+  return {
+    id: observation.id,
+    observationKey: observation.observationKey,
+    category: observation.category,
+    content: textPreview(observation.content, 420),
+    confidence: observation.confidence,
+    status: observation.status,
+    sourceTrigger: observation.sourceTrigger,
+    createdAt: observation.createdAt,
+  }
+}
+
 export function buildEvolutionPacket(params: {
   projectId?: string
   sessionId: string
@@ -50,6 +103,10 @@ export function buildEvolutionPacket(params: {
   candidate?: MemoryCandidate
 }): EvolutionPacket {
   const rules = listProjectRules({ projectId: params.projectId, workspacePath: params.workspacePath, limit: 80 })
+  const dossier = cleanProjectDossier(getLatestProjectDossier({
+    projectId: params.projectId,
+    workspacePath: params.workspacePath,
+  }))
   return {
     projectId: params.projectId,
     sessionId: params.sessionId,
@@ -58,6 +115,19 @@ export function buildEvolutionPacket(params: {
     snippets: params.messages.slice(-8),
     candidate: params.candidate,
     relatedMemories: readRelatedMemories(params.workspacePath),
+    projectDossier: dossier ? toDossierSummary(dossier) : null,
+    semanticMemories: listSemanticMemories({
+      projectId: params.projectId,
+      workspacePath: params.workspacePath,
+      statuses: ['active', 'candidate', 'stale'],
+      limit: 60,
+    }).map(toSemanticSummary),
+    recentObservations: listRecentObservations({
+      projectId: params.projectId,
+      workspacePath: params.workspacePath,
+      statuses: ['active'],
+      limit: 40,
+    }).map(toObservationSummary),
     activeRules: rules.filter(rule => rule.status === 'active').map(toRuleSummary),
     shadowRules: rules.filter(rule => rule.status === 'shadow' || rule.status === 'candidate').map(toRuleSummary),
   }

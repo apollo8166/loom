@@ -2,11 +2,14 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { Plus, Trash2, Loader2, Server, Globe, Terminal } from 'lucide-react'
-import type { McpServerConfig, McpTransport } from '@/modules/config/mcp-config'
+import type { McpScope, McpServerConfig, McpTransport } from '@/modules/config/mcp-config'
 
 interface McpServer {
   name: string
   config: McpServerConfig
+  scope: McpScope
+  sourcePath?: string
+  overriddenBy?: McpScope
 }
 
 const inputStyle: React.CSSProperties = {
@@ -21,6 +24,18 @@ const labelStyle: React.CSSProperties = {
   fontSize: 11, letterSpacing: '0.04em', color: 'var(--color-text-muted)',
 }
 
+function getMcpTransport(config: McpServerConfig): McpTransport {
+  if ('command' in config) return 'stdio'
+  return config.type
+}
+
+function describeMcpConfig(config: McpServerConfig): string {
+  if ('command' in config) {
+    return [config.command, ...(config.args || [])].filter(Boolean).join(' ')
+  }
+  return config.url
+}
+
 export function McpSettings() {
   const [servers, setServers] = useState<McpServer[]>([])
   const [loading, setLoading] = useState(true)
@@ -32,7 +47,7 @@ export function McpSettings() {
     try {
       const res = await fetch('/api/config/mcp')
       const data = await res.json()
-      setServers(data.servers || [])
+      setServers((data.servers || []).filter((server: McpServer) => server.scope === 'user'))
       setError(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载失败')
@@ -50,7 +65,7 @@ export function McpSettings() {
       const res = await fetch('/api/config/mcp', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name }),
+        body: JSON.stringify({ name, scope: 'user' }),
       })
       if (!res.ok) {
         const data = await res.json()
@@ -70,7 +85,7 @@ export function McpSettings() {
       const res = await fetch('/api/config/mcp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, config }),
+        body: JSON.stringify({ name, config, scope: 'user' }),
       })
       if (!res.ok) {
         const data = await res.json()
@@ -112,7 +127,7 @@ export function McpSettings() {
         }}>
           <Server size={24} />
           <p style={{ fontSize: 14 }}>暂无 MCP 服务器</p>
-          <p style={{ fontSize: 12 }}>点击下方按钮添加第一个服务器</p>
+          <p style={{ fontSize: 12 }}>这里管理 Claude user scope，对所有项目可见</p>
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -145,7 +160,7 @@ export function McpSettings() {
           }}
         >
           <Plus size={14} />
-          添加服务器
+          添加 User MCP
         </button>
       )}
     </div>
@@ -162,10 +177,9 @@ function McpServerRow({
   isDeleting: boolean
 }) {
   const config = server.config
-  const Icon = config.type === 'stdio' ? Terminal : Globe
-  const address = config.type === 'stdio'
-    ? config.command + (config.args?.length ? ' ' + config.args.join(' ') : '')
-    : config.url
+  const transport = getMcpTransport(config)
+  const Icon = transport === 'stdio' ? Terminal : Globe
+  const address = describeMcpConfig(config)
 
   return (
     <div style={{
@@ -183,7 +197,7 @@ function McpServerRow({
           fontSize: 11, color: 'var(--color-text-muted)',
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}>
-          {config.type.toUpperCase()} - {address}
+          USER · {transport.toUpperCase()} - {address}
         </span>
       </div>
       <button

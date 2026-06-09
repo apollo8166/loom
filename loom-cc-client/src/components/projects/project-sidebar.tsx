@@ -46,6 +46,7 @@ interface ProjectSidebarProps {
   onRename: (id: string, title: string) => void
   activePane: ProjectPane
   onPaneChange: (p: ProjectPane) => void
+  runningSessionIds?: Set<string>
   onBack?: () => void
   forceCollapsed?: boolean
   chatOnly?: boolean
@@ -56,7 +57,7 @@ interface ContextMenuState { sessionId: string; x: number; y: number }
 export function ProjectSidebar({
   project, sessions,
   activeSessionId, onSelect, onNew, onDelete, onRename,
-  activePane, onPaneChange, onBack, forceCollapsed,
+  activePane, onPaneChange, runningSessionIds = new Set(), onBack, forceCollapsed,
   chatOnly = false,
 }: ProjectSidebarProps) {
   const [isCollapsed, setIsCollapsed] = useState(false)
@@ -168,23 +169,42 @@ export function ProjectSidebar({
 
         {/* Session dots */}
         <div style={{ flex: 1, overflowY: 'auto', width: '100%', padding: '4px 0' }}>
-          {sessions.slice(0, 20).map(s => (
-            <button
-              key={s.id}
-              onClick={() => { onSelect(s.id); setIsCollapsed(false) }}
-              title={s.title}
-              style={{
-                width: '100%', height: 36,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                background: s.id === activeSessionId ? 'var(--theme-bg-active)' : 'none',
-                border: 'none', cursor: 'pointer',
-                borderLeft: 'none',
-                color: s.id === activeSessionId ? 'var(--color-accent-primary)' : 'var(--color-text-muted)',
-              }}
-            >
-              <MessageSquare size={13} />
-            </button>
-          ))}
+          {sessions.slice(0, 20).map(s => {
+            const isActive = s.id === activeSessionId
+            const isRunning = runningSessionIds.has(s.id)
+            return (
+              <button
+                key={s.id}
+                onClick={() => { onSelect(s.id); setIsCollapsed(false) }}
+                title={isRunning ? `${s.title} · 执行中` : s.title}
+                style={{
+                  width: '100%', height: 36,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  position: 'relative',
+                  background: isActive ? 'var(--theme-bg-active)' : 'none',
+                  border: 'none', cursor: 'pointer',
+                  borderLeft: 'none',
+                  color: isActive || isRunning ? 'var(--color-accent-primary)' : 'var(--color-text-muted)',
+                }}
+              >
+                <MessageSquare size={13} />
+                {isRunning && (
+                  <span
+                    className="session-running-dot"
+                    style={{
+                      position: 'absolute',
+                      right: 8,
+                      top: 9,
+                      width: 6,
+                      height: 6,
+                      borderRadius: 999,
+                      background: 'var(--color-accent-primary)',
+                    }}
+                  />
+                )}
+              </button>
+            )
+          })}
         </div>
 
         {/* Bottom nav icons */}
@@ -335,6 +355,7 @@ export function ProjectSidebar({
           )}
           {filteredSessions.map(s => {
             const isActive = s.id === activeSessionId
+            const isRunning = runningSessionIds.has(s.id)
             return (
               <div
                 key={s.id}
@@ -345,15 +366,19 @@ export function ProjectSidebar({
                   marginBottom: 6,
                   borderRadius: 9,
                   cursor: 'pointer',
-                  background: isActive ? 'var(--theme-bg-active)' : 'transparent',
-                  border: isActive ? '1px solid var(--theme-border-strong)' : '1px solid transparent',
+                  position: 'relative',
+                  background: isActive ? 'var(--theme-bg-active)' : isRunning ? 'rgba(245, 158, 11, 0.06)' : 'transparent',
+                  border: isRunning
+                    ? '1px solid rgba(245, 158, 11, 0.45)'
+                    : isActive ? '1px solid var(--theme-border-strong)' : '1px solid transparent',
+                  boxShadow: isRunning ? '0 0 0 1px rgba(245, 158, 11, 0.12), 0 0 18px rgba(245, 158, 11, 0.18)' : 'none',
                   display: 'flex', alignItems: 'flex-start', gap: 4,
                 }}
                 onMouseEnter={e => {
-                  if (!isActive) (e.currentTarget as HTMLElement).style.background = 'var(--theme-bg-hover)'
+                  if (!isActive && !isRunning) (e.currentTarget as HTMLElement).style.background = 'var(--theme-bg-hover)'
                 }}
                 onMouseLeave={e => {
-                  if (!isActive) (e.currentTarget as HTMLElement).style.background = 'transparent'
+                  if (!isActive && !isRunning) (e.currentTarget as HTMLElement).style.background = 'transparent'
                 }}
               >
                 {editingId === s.id ? (
@@ -389,10 +414,23 @@ export function ProjectSidebar({
                     }}>
                       {s.title}
                     </p>
-                    <p style={{ fontSize: 10, color: 'var(--color-text-muted)' }}>
-                      {formatTime(s.lastMessageAt || s.updatedAt)}
+                    <p style={{ fontSize: 10, color: isRunning ? '#b45309' : 'var(--color-text-muted)' }}>
+                      {isRunning ? '执行中' : formatTime(s.lastMessageAt || s.updatedAt)}
                     </p>
                   </div>
+                )}
+                {isRunning && (
+                  <span
+                    className="session-running-dot"
+                    style={{
+                      width: 7,
+                      height: 7,
+                      borderRadius: 999,
+                      background: '#F59E0B',
+                      flexShrink: 0,
+                      marginTop: 4,
+                    }}
+                  />
                 )}
               </div>
             )

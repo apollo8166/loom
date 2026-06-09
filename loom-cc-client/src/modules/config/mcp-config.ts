@@ -1,134 +1,205 @@
 /**
- * MCP server configuration management.
+ * Claude MCP server configuration management.
  *
- * Configs are stored in {workspace}/.claude.json so the Claude Agent SDK
- * picks them up automatically via the workspace `cwd` option.
+ * This follows Claude Code / Claude Agent SDK's own MCP scope model:
+ *   - local   -> ~/.claude.json projects["<cwd>"].mcpServers
+ *   - project -> <cwd>/.mcp.json mcpServers
+ *   - user    -> ~/.claude.json mcpServers
  *
- * Supported transports:
- *   http   — { type: 'http',  url: string }
- *   sse    — { type: 'sse',   url: string }
- *   stdio  — { type: 'stdio', command: string, args?: string[], env?: Record<string,string> }
+ * Effective visibility for a session is resolved by Claude Code using cwd.
+ * When names collide, higher-priority scopes win: local > project > user.
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
 import path from 'path'
 import os from 'os'
+import type { McpServerConfigForProcessTransport } from '@anthropic-ai/claude-agent-sdk'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
 export type McpTransport = 'http' | 'sse' | 'stdio'
-
-export type McpServerConfig =
-  | { type: 'http';  url: string }
-  | { type: 'sse';   url: string }
-  | { type: 'stdio'; command: string; args?: string[]; env?: Record<string, string> }
+export type McpScope = 'local' | 'project' | 'user'
+export type McpServerConfig = Exclude<McpServerConfigForProcessTransport, { type: 'sdk' }>
 
 export interface McpServer {
   name: string
   config: McpServerConfig
+  scope: McpScope
+  sourcePath: string
+  overriddenBy?: McpScope
 }
 
 interface ClaudeJson {
   mcpServers?: Record<string, McpServerConfig>
+  projects?: Record<string, { mcpServers?: Record<string, McpServerConfig>; [key: string]: unknown }>
   [key: string]: unknown
 }
 
-// ── Workspace path ────────────────────────────────────────────────────────────
-
-function getWorkspaceDir(): string {
-  if (process.env.LOOM_WORKSPACE_DIR) return process.env.LOOM_WORKSPACE_DIR
-  const name = process.env.NODE_ENV === 'production' ? 'loom-cc' : 'loom-cc-dev'
-  if (process.platform === 'darwin') {
-    return path.join(os.homedir(), 'Library', 'Application Support', name, 'workspaces')
-  }
-  if (process.platform === 'win32') {
-    return path.join(os.homedir(), 'AppData', 'Roaming', name, 'workspaces')
-  }
-  return path.join(os.homedir(), `.${name}`, 'workspaces')
+interface ProjectMcpJson {
+  mcpServers?: Record<string, McpServerConfig>
+  [key: string]: unknown
 }
 
-function getClaudeJsonPath(): string {
-  return path.join(getWorkspaceDir(), '.claude.json')
+const SCOPE_PRIORITY: Record<McpScope, number> = {
+  user: 1,
+  project: 2,
+  local: 3,
 }
 
-// ── Read / Write ──────────────────────────────────────────────────────────────
+function globalClaudeJsonPath(): string {
+  return path.join(os.homedir(), '.claude.json')
+}
+
+function projectMcpJsonPath(workspacePath: string): string {
+  return path.join(workspacePath, '.mcp.json')
+}
+
+function normalizeWorkspacePath(workspacePath?: string | null): string | null {
+  const trimmed = workspacePath?.trim()
+  return trimmed ? path.resolve(trimmed) : null
+}
+
+function readJsonFile<T extends object>(filePath: string): T {
+  if (!existsSync(filePath)) return {} as T
+  try {
+    return JSON.parse(readFileSync(filePath, 'utf-8')) as T
+  } catch {
+    return {} as T
+  }
+}
+
+function writeJsonFile(filePath: string, data: object): void {
+  mkdirSync(path.dirname(filePath), { recursive: true })
+  writeFileSync(filePath, JSON.stringify(data, null, 2) + '\n', 'utf-8')
+}
 
 function readClaudeJson(): ClaudeJson {
-  const p = getClaudeJsonPath()
-  if (!existsSync(p)) return {}
-  try {
-    return JSON.parse(readFileSync(p, 'utf-8')) as ClaudeJson
-  } catch {
-    return {}
-  }
+  return readJsonFile<ClaudeJson>(globalClaudeJsonPath())
 }
 
 function writeClaudeJson(data: ClaudeJson): void {
-  const p = getClaudeJsonPath()
-  mkdirSync(path.dirname(p), { recursive: true })
-  writeFileSync(p, JSON.stringify(data, null, 2) + '\n', 'utf-8')
+  writeJsonFile(globalClaudeJsonPath(), data)
 }
 
-/**
- * Read MCP servers from Claude Code's global ~/.claude.json.
- * Claude Code stores per-project servers under:
- *   projects["<absolute-project-path>"].mcpServers
- * We look up the project path via LOOM_PROJECT_DIR env var, or fall back
- * to the repo root (two levels above this package's __dirname at runtime).
- */
-function readGlobalClaudeMcpServers(): Record<string, McpServerConfig> {
-  const globalPath = path.join(os.homedir(), '.claude.json')
-  if (!existsSync(globalPath)) return {}
-  try {
-    const raw = JSON.parse(readFileSync(globalPath, 'utf-8')) as {
-      projects?: Record<string, { mcpServers?: Record<string, McpServerConfig> }>
-    }
-    const projects = raw.projects ?? {}
+function readProjectMcpJson(workspacePath: string): ProjectMcpJson {
+  return readJsonFile<ProjectMcpJson>(projectMcpJsonPath(workspacePath))
+}
 
-    // Determine which project key to look up
-    const projectDir =
-      process.env.LOOM_PROJECT_DIR ??
-      // In Next.js, process.cwd() is the Next.js app dir; go one level up to repo root
-      path.resolve(process.cwd(), '..')
+function writeProjectMcpJson(workspacePath: string, data: ProjectMcpJson): void {
+  writeJsonFile(projectMcpJsonPath(workspacePath), data)
+}
 
-    // Try exact match first, then prefix-match (in case of trailing slash differences)
-    const exactKey = Object.keys(projects).find(k => k === projectDir)
-    const prefixKey = exactKey ?? Object.keys(projects).find(k => projectDir.startsWith(k))
-    const key = prefixKey
+function getProjectEntry(json: ClaudeJson, workspacePath: string) {
+  json.projects = json.projects ?? {}
+  json.projects[workspacePath] = json.projects[workspacePath] ?? {}
+  return json.projects[workspacePath]
+}
 
-    if (key && projects[key]?.mcpServers) {
-      return projects[key].mcpServers as Record<string, McpServerConfig>
-    }
-    return {}
-  } catch {
-    return {}
+function collectScopedServers(scope: McpScope, servers: Record<string, McpServerConfig> | undefined, sourcePath: string): McpServer[] {
+  return Object.entries(servers ?? {}).map(([name, config]) => ({
+    name,
+    config,
+    scope,
+    sourcePath,
+  }))
+}
+
+function resolveEffectiveServers(servers: McpServer[]): McpServer[] {
+  const grouped = new Map<string, McpServer[]>()
+  for (const server of servers) {
+    const group = grouped.get(server.name) ?? []
+    group.push(server)
+    grouped.set(server.name, group)
   }
+
+  return [...grouped.values()].flatMap(group => {
+    const winner = group.reduce((best, server) =>
+      SCOPE_PRIORITY[server.scope] > SCOPE_PRIORITY[best.scope] ? server : best
+    )
+    return group.map(server => ({
+      ...server,
+      ...(server === winner ? {} : { overriddenBy: winner.scope }),
+    }))
+  })
+    .sort((a, b) => a.name.localeCompare(b.name) || SCOPE_PRIORITY[b.scope] - SCOPE_PRIORITY[a.scope])
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-/** List all configured MCP servers (workspace config + Claude Code global config) */
-export function listMcpServers(): McpServer[] {
-  // Merge: workspace-local config takes precedence over global
-  const globalServers = readGlobalClaudeMcpServers()
-  const localJson = readClaudeJson()
-  const localServers = localJson.mcpServers ?? {}
-  const merged = { ...globalServers, ...localServers }
-  return Object.entries(merged).map(([name, config]) => ({ name, config }))
+/** List Claude MCP servers visible from a workspace, annotated with their scope. */
+export function listMcpServers(workspacePath?: string | null): McpServer[] {
+  const resolvedWorkspace = normalizeWorkspacePath(workspacePath)
+  const claudeJson = readClaudeJson()
+  const servers: McpServer[] = [
+    ...collectScopedServers('user', claudeJson.mcpServers, globalClaudeJsonPath()),
+  ]
+
+  if (resolvedWorkspace) {
+    const projectJson = readProjectMcpJson(resolvedWorkspace)
+    servers.push(...collectScopedServers('project', projectJson.mcpServers, projectMcpJsonPath(resolvedWorkspace)))
+    const localServers = claudeJson.projects?.[resolvedWorkspace]?.mcpServers
+    servers.push(...collectScopedServers('local', localServers, globalClaudeJsonPath()))
+  }
+
+  return resolveEffectiveServers(servers)
 }
 
-/** Add or update an MCP server */
-export function addMcpServer(name: string, config: McpServerConfig): void {
+/** Add or update a Claude MCP server in the selected Claude scope. */
+export function addMcpServer(name: string, config: McpServerConfig, scope: McpScope = 'local', workspacePath?: string | null): void {
+  const trimmedName = name.trim()
+  if (!trimmedName) throw new Error('name cannot be empty')
+
+  if (scope === 'project') {
+    const resolvedWorkspace = normalizeWorkspacePath(workspacePath)
+    if (!resolvedWorkspace) throw new Error('workspacePath is required for project MCP scope')
+    const json = readProjectMcpJson(resolvedWorkspace)
+    json.mcpServers = { ...(json.mcpServers ?? {}), [trimmedName]: config }
+    writeProjectMcpJson(resolvedWorkspace, json)
+    return
+  }
+
   const json = readClaudeJson()
-  json.mcpServers = { ...(json.mcpServers ?? {}), [name]: config }
+  if (scope === 'user') {
+    json.mcpServers = { ...(json.mcpServers ?? {}), [trimmedName]: config }
+    writeClaudeJson(json)
+    return
+  }
+
+  const resolvedWorkspace = normalizeWorkspacePath(workspacePath)
+  if (!resolvedWorkspace) throw new Error('workspacePath is required for local MCP scope')
+  const project = getProjectEntry(json, resolvedWorkspace)
+  project.mcpServers = { ...(project.mcpServers ?? {}), [trimmedName]: config }
   writeClaudeJson(json)
 }
 
-/** Remove an MCP server by name. Returns true if it existed. */
-export function removeMcpServer(name: string): boolean {
+/** Remove a Claude MCP server from a specific Claude scope. */
+export function removeMcpServer(name: string, scope: McpScope = 'local', workspacePath?: string | null): boolean {
+  const trimmedName = name.trim()
+  if (!trimmedName) return false
+
+  if (scope === 'project') {
+    const resolvedWorkspace = normalizeWorkspacePath(workspacePath)
+    if (!resolvedWorkspace) throw new Error('workspacePath is required for project MCP scope')
+    const json = readProjectMcpJson(resolvedWorkspace)
+    if (!json.mcpServers?.[trimmedName]) return false
+    delete json.mcpServers[trimmedName]
+    writeProjectMcpJson(resolvedWorkspace, json)
+    return true
+  }
+
   const json = readClaudeJson()
-  if (!json.mcpServers?.[name]) return false
-  delete json.mcpServers[name]
+  if (scope === 'user') {
+    if (!json.mcpServers?.[trimmedName]) return false
+    delete json.mcpServers[trimmedName]
+    writeClaudeJson(json)
+    return true
+  }
+
+  const resolvedWorkspace = normalizeWorkspacePath(workspacePath)
+  if (!resolvedWorkspace) throw new Error('workspacePath is required for local MCP scope')
+  const project = json.projects?.[resolvedWorkspace]
+  if (!project?.mcpServers?.[trimmedName]) return false
+  delete project.mcpServers[trimmedName]
   writeClaudeJson(json)
   return true
 }
@@ -138,19 +209,17 @@ export function removeMcpServer(name: string): boolean {
 /**
  * Parse a `/mcp add` command string into an McpServerConfig.
  *
- * Supported formats (mirrors `claude mcp add` CLI):
- *   /mcp add --transport http  <name> <url>
- *   /mcp add --transport sse   <name> <url>
- *   /mcp add --transport stdio <name> <command> [arg1 arg2 ...]
- *   /mcp add <name> <command> [args...]          <- stdio default
- *
- * Returns { name, config } or throws with a descriptive error.
+ * Supported formats:
+ *   /mcp add --scope local|project|user --transport http  <name> <url>
+ *   /mcp add --scope local|project|user --transport sse   <name> <url>
+ *   /mcp add --scope local|project|user --transport stdio <name> <command> [arg1 arg2 ...]
+ *   /mcp add <name> <command> [args...]          <- local scope, stdio default
  */
-export function parseMcpAddCommand(args: string[]): { name: string; config: McpServerConfig } {
+export function parseMcpAddCommand(args: string[]): { name: string; config: McpServerConfig; scope: McpScope } {
   let transport: McpTransport = 'stdio'
+  let scope: McpScope = 'local'
   const rest = [...args]
 
-  // Extract --transport flag
   const tIdx = rest.indexOf('--transport')
   if (tIdx !== -1) {
     const tVal = rest[tIdx + 1]
@@ -161,8 +230,18 @@ export function parseMcpAddCommand(args: string[]): { name: string; config: McpS
     rest.splice(tIdx, 2)
   }
 
+  const scopeIdx = rest.indexOf('--scope')
+  if (scopeIdx !== -1) {
+    const scopeVal = rest[scopeIdx + 1]
+    if (!scopeVal || !['local', 'project', 'user'].includes(scopeVal)) {
+      throw new Error(`--scope must be local / project / user, got: ${scopeVal ?? '(empty)'}`)
+    }
+    scope = scopeVal as McpScope
+    rest.splice(scopeIdx, 2)
+  }
+
   if (rest.length < 2) {
-    throw new Error('Usage: /mcp add [--transport http|sse|stdio] <name> <url or command> [args...]')
+    throw new Error('Usage: /mcp add [--scope local|project|user] [--transport http|sse|stdio] <name> <url or command> [args...]')
   }
 
   const name = rest[0]
@@ -170,12 +249,12 @@ export function parseMcpAddCommand(args: string[]): { name: string; config: McpS
   const extraArgs = rest.slice(2)
 
   if (transport === 'http' || transport === 'sse') {
-    return { name, config: { type: transport, url: second } }
+    return { name, scope, config: { type: transport, url: second } }
   }
 
-  // stdio
   return {
     name,
+    scope,
     config: {
       type: 'stdio',
       command: second,

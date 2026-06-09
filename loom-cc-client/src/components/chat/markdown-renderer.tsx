@@ -1,17 +1,387 @@
 'use client'
 
-import { useState, useEffect, useCallback, memo, useMemo, useRef } from 'react'
+import { useState, useEffect, useCallback, memo, useMemo, useRef, isValidElement } from 'react'
+import type { ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { Components } from 'react-markdown'
-import { Check, Copy } from 'lucide-react'
+import { Check, Copy, Download, FileVideo } from 'lucide-react'
 
 // All supported code themes
 const CODE_THEMES = ['github-dark', 'github-light', 'monokai', 'one-dark-pro', 'dracula', 'nord'] as const
 const REMARK_PLUGINS = [remarkGfm]
 
+type MarkdownPreviewFile = {
+  url: string
+  name: string
+  mimeType: string
+  previewApiUrl?: string
+}
+
+function renderMissingImage(alt?: string) {
+  if (!alt) return null
+  return (
+    <span className="inline-block my-2 text-[12px]" style={{ color: 'var(--color-text-muted)' }}>
+      {alt}
+    </span>
+  )
+}
+
+function normalizeFileUrl(rawUrl: string): string {
+  const trimmed = rawUrl.trim()
+  if (!trimmed.startsWith('file://')) return trimmed
+  return `/api/local-files/serve?path=${encodeURIComponent(fileUrlToPath(trimmed))}`
+}
+
+function safeDecodeURIComponent(value: string): string {
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return value
+  }
+}
+
+function fileUrlToPath(rawUrl: string): string {
+  try {
+    return safeDecodeURIComponent(new URL(rawUrl).pathname)
+  } catch {
+    return safeDecodeURIComponent(rawUrl.replace(/^file:\/\//, ''))
+  }
+}
+
+function basenameFromPath(filePath: string): string {
+  const cleaned = filePath.replace(/[\\/]+$/, '')
+  return cleaned.split(/[\\/]/).filter(Boolean).pop() || cleaned || 'file'
+}
+
+function localFilePathFromHref(rawHref: string): string | null {
+  if (rawHref.startsWith('file://')) return fileUrlToPath(rawHref)
+  try {
+    const base = typeof window === 'undefined' ? 'http://localhost' : window.location.origin
+    const url = new URL(rawHref, base)
+    if (url.pathname !== '/api/local-files/serve') return null
+    return url.searchParams.get('path')
+  } catch {
+    return null
+  }
+}
+
+function localFileNameFromHref(rawHref: string): string | null {
+  const filePath = localFilePathFromHref(rawHref)
+  return filePath ? basenameFromPath(filePath) : null
+}
+
+function rewriteLocalFileUrls(markdown: string): string {
+  const lines = markdown.split(/\r?\n/)
+  let inFence = false
+  return lines.map((line) => {
+    if (/^\s*(```|~~~)/.test(line)) {
+      inFence = !inFence
+      return line
+    }
+    if (inFence) return line
+
+    let next = line.replace(/(\]\()file:\/\/([^)]+)(\))/g, (_match, open: string, rest: string, close: string) => {
+      const rawUrl = `file://${rest}`
+      return `${open}${normalizeFileUrl(rawUrl)}${close}`
+    })
+    next = next.replace(/<file:\/\/([^>]+)>/g, (_match, rest: string) => {
+      const rawUrl = `file://${rest}`
+      return `[${basenameFromPath(fileUrlToPath(rawUrl))}](${normalizeFileUrl(rawUrl)})`
+    })
+    next = next.replace(/\bfile:\/\/[^\s<>)\]]+/g, (rawUrl: string) => {
+      return `[${basenameFromPath(fileUrlToPath(rawUrl))}](${normalizeFileUrl(rawUrl)})`
+    })
+    return next
+  }).join('\n')
+}
+
+const IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'])
+
+function extensionFromName(name: string): string {
+  return name.split('.').pop()?.toLowerCase() || ''
+}
+
+function formatFileSize(bytes: number | null): string {
+  if (bytes === null || !Number.isFinite(bytes) || bytes < 0) return '未知大小'
+  if (bytes < 1024) return `${bytes}B`
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)}KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`
+}
+
+function mimeTypeFromName(name: string): string {
+  const ext = extensionFromName(name)
+  const map: Record<string, string> = {
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    png: 'image/png',
+    gif: 'image/gif',
+    webp: 'image/webp',
+    svg: 'image/svg+xml',
+    bmp: 'image/bmp',
+    mp4: 'video/mp4',
+    pdf: 'application/pdf',
+    txt: 'text/plain',
+    md: 'text/markdown',
+    csv: 'text/csv',
+    json: 'application/json',
+    doc: 'application/msword',
+    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    xls: 'application/vnd.ms-excel',
+    xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    ppt: 'application/vnd.ms-powerpoint',
+    pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  }
+  return map[ext] || 'application/octet-stream'
+}
+
+function canUseLocalPreviewApi(name: string): boolean {
+  return ['doc', 'docx', 'odt', 'xls', 'xlsx', 'xlsm', 'xlsb', 'ods'].includes(extensionFromName(name))
+}
+
+function canPreviewFileName(name: string): boolean {
+  const ext = extensionFromName(name)
+  return IMAGE_EXTS.has(ext) ||
+    ext === 'pdf' ||
+    ext === 'mp4' ||
+    ['doc', 'docx', 'odt', 'xls', 'xlsx', 'xlsm', 'xlsb', 'ods'].includes(ext) ||
+    ['md', 'mdx', 'txt', 'csv', 'json', 'yaml', 'yml', 'toml', 'xml', 'html', 'htm', 'css', 'scss',
+      'ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'py', 'rs', 'go', 'java', 'cpp', 'c', 'h', 'cs', 'rb', 'php',
+      'swift', 'kt', 'sh', 'bash', 'zsh', 'sql', 'env'].includes(ext)
+}
+
+function getFileChipConfig(name: string, contentType?: string | null): { letter: string; color: string; typeLabel: string; icon?: 'video' } {
+  const ext = extensionFromName(name)
+  if (contentType?.startsWith('video/') || ext === 'mp4') return { letter: 'MP4', color: '#0ea5e9', typeLabel: 'Video', icon: 'video' }
+  if (contentType === 'application/pdf' || ext === 'pdf') return { letter: 'PDF', color: '#ef4444', typeLabel: 'PDF' }
+  if (['doc', 'docx', 'odt'].includes(ext)) return { letter: 'W', color: '#2b579a', typeLabel: 'Word' }
+  if (['xls', 'xlsx', 'xlsm', 'xlsb', 'ods'].includes(ext)) return { letter: 'X', color: '#217346', typeLabel: 'Excel' }
+  if (['ppt', 'pptx', 'odp'].includes(ext)) return { letter: 'P', color: '#d24726', typeLabel: 'PowerPoint' }
+  if (['md', 'mdx'].includes(ext)) return { letter: 'MD', color: '#22c55e', typeLabel: 'Markdown' }
+  if (ext === 'csv') return { letter: 'CSV', color: '#16a34a', typeLabel: 'CSV' }
+  if (ext === 'txt') return { letter: 'TXT', color: '#6b7280', typeLabel: 'Text' }
+  if (ext === 'json') return { letter: '{ }', color: '#8b5cf6', typeLabel: 'JSON' }
+  return { letter: 'FILE', color: '#6b7280', typeLabel: 'File' }
+}
+
+function nodeText(node: ReactNode): string {
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(nodeText).join('')
+  if (isValidElement<{ children?: ReactNode }>(node)) return nodeText(node.props.children)
+  return ''
+}
+
+function useLocalFileMeta(href: string) {
+  const [meta, setMeta] = useState<{ size: number | null; contentType: string | null } | null>(null)
+
+  useEffect(() => {
+    if (!href.startsWith('/api/local-files/serve')) {
+      setMeta(null)
+      return
+    }
+
+    let cancelled = false
+    const controller = new AbortController()
+    const timeout = window.setTimeout(() => controller.abort(), 8000)
+    fetch(href, { method: 'HEAD', signal: controller.signal })
+      .then((res) => {
+        if (!res.ok) throw new Error(`HEAD ${res.status}`)
+        const length = Number(res.headers.get('content-length') || '')
+        setMeta({
+          size: Number.isFinite(length) ? length : null,
+          contentType: res.headers.get('content-type'),
+        })
+      })
+      .catch(() => {
+        if (!cancelled) setMeta({ size: null, contentType: null })
+      })
+      .finally(() => window.clearTimeout(timeout))
+
+    return () => {
+      cancelled = true
+      window.clearTimeout(timeout)
+      controller.abort()
+    }
+  }, [href])
+
+  return meta
+}
+
+function LocalFileCard({
+  href,
+  children,
+  onPreviewFile,
+}: {
+  href: string
+  children: ReactNode
+  onPreviewFile?: (file: MarkdownPreviewFile) => void
+}) {
+  const name = localFileNameFromHref(href) || nodeText(children).trim() || 'file'
+  const meta = useLocalFileMeta(href)
+  const cfg = getFileChipConfig(name, meta?.contentType)
+  const filePath = localFilePathFromHref(href)
+  const mimeType = meta?.contentType || mimeTypeFromName(name)
+  const previewApiUrl = filePath && canUseLocalPreviewApi(name)
+    ? `/api/local-files/preview?path=${encodeURIComponent(filePath)}`
+    : undefined
+  const canPreview = Boolean(onPreviewFile && canPreviewFileName(name))
+
+  const handleClick = useCallback((event: React.MouseEvent<HTMLAnchorElement>) => {
+    if (!onPreviewFile || !canPreview) return
+    event.preventDefault()
+    onPreviewFile({ url: href, name, mimeType, previewApiUrl })
+  }, [canPreview, href, name, mimeType, onPreviewFile, previewApiUrl])
+
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      download={name}
+      onClick={handleClick}
+      className="group/local-file-card my-2 no-underline"
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 10,
+        maxWidth: 'min(100%, 360px)',
+        minWidth: 220,
+        padding: '8px 12px',
+        borderRadius: 10,
+        border: '1px solid var(--color-border-strong)',
+        background: 'var(--color-bg-surface)',
+        verticalAlign: 'middle',
+      }}
+      title={canPreview ? '点击预览' : name}
+    >
+      <span
+        style={{
+          width: 36,
+          height: 36,
+          borderRadius: 6,
+          flexShrink: 0,
+          background: cfg.color,
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        {cfg.icon === 'video' ? (
+          <FileVideo size={20} style={{ color: 'white' }} />
+        ) : (
+          <span style={{ fontSize: cfg.letter.length > 2 ? 9 : cfg.letter.length > 1 ? 11 : 14, fontWeight: 700, color: 'white', fontFamily: SYSTEM_MONO, lineHeight: 1 }}>
+            {cfg.letter}
+          </span>
+        )}
+      </span>
+      <span style={{ minWidth: 0, flex: 1 }}>
+        <span style={{ display: 'block', fontSize: 12, fontWeight: 500, color: 'var(--color-text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {name}
+        </span>
+        <span style={{ display: 'block', fontSize: 10, color: 'var(--color-text-muted)', marginTop: 2 }}>
+          {cfg.typeLabel} · {meta ? formatFileSize(meta.size) : '读取大小...'}
+        </span>
+      </span>
+      <Download size={15} style={{ color: 'var(--color-text-muted)', flexShrink: 0 }} />
+    </a>
+  )
+}
+
+function LocalImageLink({
+  href,
+  children,
+  onPreviewFile,
+}: {
+  href: string
+  children: ReactNode
+  onPreviewFile?: (file: MarkdownPreviewFile) => void
+}) {
+  const name = localFileNameFromHref(href) || nodeText(children).trim() || ''
+  const handleClick = useCallback(() => {
+    onPreviewFile?.({ url: href, name: name || 'image', mimeType: mimeTypeFromName(name) })
+  }, [href, name, onPreviewFile])
+
+  return (
+    <span
+      className="inline-block my-2"
+      onClick={handleClick}
+      style={{ cursor: onPreviewFile ? 'pointer' : 'default' }}
+      title={onPreviewFile ? '点击预览' : name}
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={href}
+        alt={name}
+        className="max-w-[400px] max-h-[300px] rounded-lg object-contain"
+        style={{ border: '1px solid var(--color-border-subtle)' }}
+        loading="lazy"
+      />
+      {name && (
+        <span style={{ display: 'block', marginTop: 6, fontSize: 11, color: 'var(--color-text-disabled)', textAlign: 'center' }}>
+          {name}
+        </span>
+      )}
+    </span>
+  )
+}
+
+function renderLocalAwareLink(
+  href: string | undefined,
+  children: ReactNode,
+  onPreviewFile?: (file: MarkdownPreviewFile) => void,
+) {
+  const safeHref = typeof href === 'string' ? normalizeFileUrl(href) : href
+  if (typeof safeHref === 'string' && localFilePathFromHref(safeHref)) {
+    const name = localFileNameFromHref(safeHref) || nodeText(children)
+    if (IMAGE_EXTS.has(extensionFromName(name))) {
+      return <LocalImageLink href={safeHref} onPreviewFile={onPreviewFile}>{children}</LocalImageLink>
+    }
+    return <LocalFileCard href={safeHref} onPreviewFile={onPreviewFile}>{children}</LocalFileCard>
+  }
+  return (
+    <a href={safeHref} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--color-accent-primary)' }} className="hover:underline">
+      {children}
+    </a>
+  )
+}
+
+function ChatImage({
+  src,
+  alt,
+  onPreviewFile,
+}: {
+  src: string
+  alt?: string
+  onPreviewFile?: (file: MarkdownPreviewFile) => void
+}) {
+  const name = localFileNameFromHref(src) || alt || 'image'
+  const handleClick = useCallback(() => {
+    if (!onPreviewFile) return
+    onPreviewFile({ url: src, name, mimeType: mimeTypeFromName(name) })
+  }, [name, onPreviewFile, src])
+
+  return (
+    <span
+      className="inline-block my-2"
+      onClick={handleClick}
+      style={{ cursor: onPreviewFile && localFilePathFromHref(src) ? 'pointer' : 'default' }}
+      title={onPreviewFile && localFilePathFromHref(src) ? '点击预览' : name}
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={src}
+        alt={alt || ''}
+        className="max-w-[400px] max-h-[300px] rounded-lg object-contain"
+        style={{ border: '1px solid var(--color-border-subtle)' }}
+        loading="lazy"
+      />
+    </span>
+  )
+}
+
 // Shiki highlighter singleton (lazy-loaded)
 let highlighterPromise: Promise<unknown> | null = null
+const highlightHtmlCache = new Map<string, string | null>()
 
 function getHighlighter() {
   if (!highlighterPromise) {
@@ -97,29 +467,17 @@ const SYSTEM_MONO = 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, mono
 /* -- Code Block with Shiki -- */
 
 function CodeBlock({ lang, code }: { lang: string; code: string }) {
-  const [html, setHtml] = useState<string | null>(null)
-  const htmlCacheRef = useRef<{ key: string; html: string | null }>({ key: '', html: null })
   const codeTheme = useCodeTheme()
   const isDiff = lang === 'diff'
+  const cacheKey = `${codeTheme}\u0000${lang}\u0000${code}`
+  const [, bumpHighlightVersion] = useState(0)
+  const html = !isDiff ? highlightHtmlCache.get(cacheKey) ?? null : null
 
   useEffect(() => {
-    const cacheKey = `${codeTheme}\u0000${lang}\u0000${code}`
-    if (isDiff) {
-      if (htmlCacheRef.current.key !== cacheKey || htmlCacheRef.current.html !== null) {
-        htmlCacheRef.current = { key: cacheKey, html: null }
-        setHtml(prev => prev === null ? prev : null)
-      }
-      return
-    }
-
-    if (htmlCacheRef.current.key === cacheKey) {
-      setHtml(prev => prev === htmlCacheRef.current.html ? prev : htmlCacheRef.current.html)
-      return
-    }
+    if (isDiff || highlightHtmlCache.has(cacheKey)) return
 
     let cancelled = false
     getHighlighter().then((hl) => {
-      if (cancelled) return
       const highlighter = hl as {
         codeToHtml: (code: string, opts: { lang: string; theme: string }) => string
         getLoadedLanguages: () => string[]
@@ -128,15 +486,17 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
       const effectiveLang = loadedLangs.includes(lang) ? lang : 'text'
       try {
         const result = highlighter.codeToHtml(code, { lang: effectiveLang, theme: codeTheme })
-        htmlCacheRef.current = { key: cacheKey, html: result }
-        setHtml(prev => prev === result ? prev : result)
+        highlightHtmlCache.set(cacheKey, result)
       } catch {
-        htmlCacheRef.current = { key: cacheKey, html: null }
-        setHtml(prev => prev === null ? prev : null)
+        highlightHtmlCache.set(cacheKey, null)
       }
-    }).catch(() => {})
+      if (!cancelled) bumpHighlightVersion(version => version + 1)
+    }).catch(() => {
+      highlightHtmlCache.set(cacheKey, null)
+      if (!cancelled) bumpHighlightVersion(version => version + 1)
+    })
     return () => { cancelled = true }
-  }, [lang, code, isDiff, codeTheme])
+  }, [cacheKey, code, codeTheme, isDiff, lang])
 
   return (
     <div className="my-4 rounded-[5px] overflow-hidden" style={{ border: '1px solid var(--color-border-subtle)' }}>
@@ -259,11 +619,7 @@ const components: Components = {
     )
   },
   a({ href, children }) {
-    return (
-      <a href={href} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--color-accent-primary)' }} className="hover:underline">
-        {children}
-      </a>
-    )
+    return renderLocalAwareLink(href, children)
   },
   table({ children }) {
     return (
@@ -285,18 +641,9 @@ const components: Components = {
     return <hr className="my-6" style={{ borderColor: 'var(--color-border-subtle)' }} />
   },
   img({ src, alt }) {
-    return (
-      <span className="inline-block my-2">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={src}
-          alt={alt || ''}
-          className="max-w-[400px] max-h-[300px] rounded-lg object-contain"
-          style={{ border: '1px solid var(--color-border-subtle)' }}
-          loading="lazy"
-        />
-      </span>
-    )
+    const imageSrc = typeof src === 'string' ? normalizeFileUrl(src) : ''
+    if (!imageSrc) return renderMissingImage(alt)
+    return <ChatImage src={imageSrc} alt={alt} />
   },
 }
 
@@ -438,11 +785,13 @@ function createDocumentComponents(baseUrl?: string): Components {
       return <hr className="my-8 border-0 border-t" style={{ borderColor: 'var(--color-border-subtle)' }} />
     },
     img({ src, alt }) {
+      const resolvedSrc = imageSrc(src).trim()
+      if (!resolvedSrc) return renderMissingImage(alt)
       return (
         <span className="block my-6 text-center">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            src={imageSrc(src)}
+            src={resolvedSrc}
             alt={alt || ''}
             className="mx-auto block max-h-[70vh] max-w-full object-contain"
             style={{ borderRadius: 4 }}
@@ -466,6 +815,7 @@ function createDocumentComponents(baseUrl?: string): Components {
 
 function resolveImgSrc(src: string | Blob | undefined, baseUrl: string): string {
   if (!src || typeof src !== 'string') return ''
+  if (src.startsWith('file://')) return normalizeFileUrl(src)
   // Absolute URLs and data URIs stay as-is
   if (src.startsWith('http') || src.startsWith('/') || src.startsWith('data:')) return src
   try {
@@ -563,28 +913,57 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
   content,
   baseUrl,
   variant = 'chat',
+  onPreviewFile,
 }: {
   content: string
   /** Base URL for resolving relative image paths in markdown (e.g. file preview context) */
   baseUrl?: string
   variant?: 'chat' | 'document'
+  onPreviewFile?: (file: MarkdownPreviewFile) => void
 }) {
   const renderedContent = useMemo(() => {
-    if (variant !== 'document') return content
-    return prepareDocumentMarkdown(content)
+    const normalized = rewriteLocalFileUrls(content)
+    if (variant !== 'document') return normalized
+    return prepareDocumentMarkdown(normalized)
   }, [content, variant])
 
   const resolvedComponents = useMemo<Components>(() => {
     if (variant === 'document') return createDocumentComponents(baseUrl)
-    if (!baseUrl) return components
+    if (!baseUrl) {
+      return {
+        ...components,
+        a({ href, children }) {
+          return renderLocalAwareLink(href, children, onPreviewFile)
+        },
+        img({ src, alt }) {
+          const imageSrc = typeof src === 'string' ? normalizeFileUrl(src) : ''
+          if (!imageSrc) return renderMissingImage(alt)
+          return <ChatImage src={imageSrc} alt={alt} onPreviewFile={onPreviewFile} />
+        },
+      }
+    }
     return {
       ...components,
+      a({ href, children }) {
+        return renderLocalAwareLink(href, children, onPreviewFile)
+      },
       img({ src, alt }) {
+        const resolvedSrc = resolveImgSrc(src, baseUrl).trim()
+        if (!resolvedSrc) return renderMissingImage(alt)
+        const canPreview = Boolean(onPreviewFile && localFilePathFromHref(resolvedSrc))
+        const name = localFileNameFromHref(resolvedSrc) || alt || 'image'
         return (
-          <span className="block my-4">
+          <span
+            className="block my-4"
+            onClick={() => {
+              if (canPreview) onPreviewFile?.({ url: resolvedSrc, name, mimeType: mimeTypeFromName(name) })
+            }}
+            style={{ cursor: canPreview ? 'pointer' : 'default' }}
+            title={canPreview ? '点击预览' : name}
+          >
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src={resolveImgSrc(src, baseUrl)}
+              src={resolvedSrc}
               alt={alt || ''}
               style={{
                 maxWidth: '100%', height: 'auto', borderRadius: 8,
@@ -604,7 +983,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
         )
       },
     }
-  }, [baseUrl, variant])
+  }, [baseUrl, onPreviewFile, variant])
 
   return (
     <div

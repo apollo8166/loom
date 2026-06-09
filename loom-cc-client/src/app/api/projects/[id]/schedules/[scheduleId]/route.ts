@@ -1,11 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getDb } from '@/shared/db/db'
 import type { ScheduledTask } from '@/shared/types'
+import { parseTaskSkillNames, serializeTaskSkillNames } from '@/shared/runtime/cron/task-skills'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 function mapTask(row: Record<string, unknown>): ScheduledTask {
+  const skillName = (row.skill_name as string) ?? ''
+  const skillNames = parseTaskSkillNames(skillName)
   return {
     id: row.id as string,
     projectId: row.project_id as string,
@@ -13,7 +16,9 @@ function mapTask(row: Record<string, unknown>): ScheduledTask {
     description: (row.description as string) ?? '',
     schedule: row.schedule as string,
     prompt: row.prompt as string,
-    skillName: (row.skill_name as string) ?? '',
+    agentName: (row.agent_name as string) ?? '',
+    skillName,
+    skillNames,
     model: row.model as string,
     enabled: (row.enabled as number) === 1,
     lastRunAt: (row.last_run_at as string) ?? null,
@@ -48,7 +53,7 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
 
   const body = await req.json() as Partial<{
     name: string; description: string; schedule: string
-    prompt: string; skillName: string; model: string; enabled: boolean
+    prompt: string; agentName: string; skillName: string; skillNames: string[]; model: string; enabled: boolean
   }>
 
   const fields: string[] = []
@@ -58,7 +63,11 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
   if (body.description !== undefined) { fields.push('description = ?'); values.push(body.description.trim()) }
   if (body.schedule !== undefined)    { fields.push('schedule = ?');    values.push(body.schedule.trim()) }
   if (body.prompt !== undefined)      { fields.push('prompt = ?');      values.push(body.prompt.trim()) }
-  if (body.skillName !== undefined)   { fields.push('skill_name = ?');  values.push(body.skillName.trim()) }
+  if (body.agentName !== undefined)   { fields.push('agent_name = ?');  values.push(body.agentName.trim()) }
+  if (body.skillNames !== undefined || body.skillName !== undefined) {
+    fields.push('skill_name = ?')
+    values.push(serializeTaskSkillNames(body.skillNames ?? body.skillName))
+  }
   if (body.model !== undefined)       { fields.push('model = ?');       values.push(body.model.trim()) }
   if (body.enabled !== undefined)     { fields.push('enabled = ?');     values.push(body.enabled ? 1 : 0) }
 

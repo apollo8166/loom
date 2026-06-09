@@ -6,5 +6,7 @@ export async function register() {
   if (process.env.NEXT_RUNTIME === 'nodejs') {
     const { startCronEngine } = await import('@/shared/runtime/cron/engine')
     startCronEngine()
+    const { getImBridgeManager } = await import('@/shared/im/bridge-manager')
+    getImBridgeManager().autoReconnect().catch(() => {})
   }
 }

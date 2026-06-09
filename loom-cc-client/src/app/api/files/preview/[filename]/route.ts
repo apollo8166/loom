@@ -22,14 +22,14 @@ type PreviewResult =
 
 function detectLanguage(ext: string): string {
   const map: Record<string, string> = {
-    ts: 'typescript', tsx: 'tsx', js: 'javascript', jsx: 'jsx',
+    ts: 'typescript', tsx: 'tsx', js: 'javascript', jsx: 'jsx', mjs: 'javascript', cjs: 'javascript',
     py: 'python', rs: 'rust', go: 'go', java: 'java',
     cpp: 'cpp', c: 'c', h: 'c', cs: 'csharp',
     rb: 'ruby', php: 'php', swift: 'swift', kt: 'kotlin',
     sh: 'bash', bash: 'bash', zsh: 'bash',
     json: 'json', yaml: 'yaml', yml: 'yaml', toml: 'toml',
     html: 'html', htm: 'html', css: 'css', scss: 'scss',
-    sql: 'sql', md: 'markdown', xml: 'xml', csv: 'csv',
+    sql: 'sql', md: 'markdown', mdx: 'markdown', xml: 'xml', csv: 'csv',
   }
   return map[ext] || 'text'
 }

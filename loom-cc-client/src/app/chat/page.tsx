@@ -44,6 +44,7 @@ export default function ChatPage() {
     sessions,
     activeSession,
     activeSessionId,
+    runningSessionIds,
     createSession,
     selectSession,
     updateSession,
@@ -193,6 +194,7 @@ export default function ChatPage() {
         project={project}
         sessions={sessions}
         activeSessionId={sessionDraft ? null : activeSessionId}
+        runningSessionIds={runningSessionIds}
         onSelect={(id) => { setSessionDraft(null); selectSession(id) }}
         onNew={handleNewSession}
         onDelete={deleteSession}

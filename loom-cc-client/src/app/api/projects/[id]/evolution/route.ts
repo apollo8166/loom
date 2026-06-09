@@ -3,8 +3,9 @@ import { getDb } from '@/shared/db/db'
 import { listProjectRules } from '@/shared/evolution/rule-store'
 import { readEvolutionEvents } from '@/shared/evolution/events'
 import { listRecentObservations } from '@/shared/evolution/observation-store'
+import { filterCoveredRecentObservations } from '@/shared/evolution/observation-visibility'
 import { listSemanticMemories } from '@/shared/evolution/semantic-memory-store'
-import { getLatestProjectDossier, rebuildProjectDossierDeterministic } from '@/shared/evolution/dossier-store'
+import { cleanProjectDossier, getLatestProjectDossier, rebuildProjectDossierDeterministic } from '@/shared/evolution/dossier-store'
 import { listFactRecords } from '@/shared/evolution/fact-store'
 import { listNegativePriors } from '@/shared/evolution/negative-priors'
 import { readLatestMemoryJob } from '@/shared/memory/background-jobs'
@@ -47,10 +48,15 @@ export async function GET(
   const rules = listProjectRules({ projectId: id, workspacePath, limit: 500 })
   const observations = listRecentObservations({ projectId: id, workspacePath, limit: 80 })
   const semanticMemories = listSemanticMemories({ projectId: id, workspacePath, limit: 120 })
-  const dossier = getLatestProjectDossier({ projectId: id, workspacePath }) || rebuildProjectDossierDeterministic({
+  const dossier = cleanProjectDossier(getLatestProjectDossier({ projectId: id, workspacePath }) || rebuildProjectDossierDeterministic({
     projectId: id,
     workspacePath,
     source: 'api',
+  }))
+  const visibleObservations = filterCoveredRecentObservations({
+    observations,
+    semanticMemories,
+    dossier,
   })
   const facts = listFactRecords({ projectId: id, workspacePath, limit: 40 })
   const negativePriors = listNegativePriors({ projectId: id, workspacePath, limit: 40 })
@@ -63,13 +69,13 @@ export async function GET(
       shadowRules: rules.filter(rule => rule.status === 'shadow').length,
       deprecatedRules: rules.filter(rule => rule.status === 'deprecated' || rule.status === 'superseded').length,
       semanticMemories: semanticMemories.filter(memory => memory.status === 'active').length,
-      recentObservations: observations.filter(observation => observation.status === 'active').length,
+      recentObservations: visibleObservations.filter(observation => observation.status === 'active').length,
       factRecords: facts.length,
       negativePriors: negativePriors.length,
       recentEvents: events.length,
     },
     rules,
-    observations,
+    observations: visibleObservations,
     semanticMemories,
     dossier,
     facts,
@@ -93,10 +99,10 @@ export async function POST(
     reason: 'periodic',
   })
   await auditShadowRules({ projectId: id, workspacePath })
-  const dossier = rebuildProjectDossierDeterministic({
+  const dossier = cleanProjectDossier(getLatestProjectDossier({ projectId: id, workspacePath }) || rebuildProjectDossierDeterministic({
     projectId: id,
     workspacePath,
     source: 'manual',
-  })
+  }))
   return NextResponse.json({ result, dossier })
 }

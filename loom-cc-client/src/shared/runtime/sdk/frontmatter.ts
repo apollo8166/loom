@@ -8,7 +8,9 @@ export interface AgentFrontmatter {
   description?: string
   model?: string
   enabled?: boolean
+  tools?: string[]
   disallowedTools?: string[]
+  skills?: string[]
 }
 
 /**
@@ -18,7 +20,7 @@ export interface AgentFrontmatter {
  * Supports:
  * - name, description, model (string fields)
  * - enabled (boolean, defaults to true unless explicitly "false")
- * - disallowedTools: inline array [a, b] or YAML list format (- item)
+ * - tools, disallowedTools, skills: inline array [a, b] or YAML list format (- item)
  */
 export function parseFrontmatter(content: string): { frontmatter: AgentFrontmatter; body: string } {
   const trimmed = content.trim()
@@ -45,13 +47,7 @@ export function parseFrontmatter(content: string): { frontmatter: AgentFrontmatt
     const key = line.slice(0, colonIdx).trim()
     let value = line.slice(colonIdx + 1).trim()
 
-    // Remove surrounding quotes (only if they match)
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1)
-    }
+    value = parseScalarValue(value)
 
     switch (key) {
       case 'name':
@@ -66,31 +62,68 @@ export function parseFrontmatter(content: string): { frontmatter: AgentFrontmatt
       case 'enabled':
         frontmatter.enabled = value !== 'false'
         break
+      case 'tools':
+        frontmatter.tools = parseStringList(value, lines, () => i++, () => lines[i + 1]?.trim())
+        break
       case 'disallowedTools':
-        if (value.startsWith('[') && value.endsWith(']')) {
-          frontmatter.disallowedTools = value
-            .slice(1, -1)
-            .split(',')
-            .map(s => s.trim())
-            .filter(Boolean)
-        } else if (value === '') {
-          const items: string[] = []
-          while (i + 1 < lines.length) {
-            const nextLine = lines[i + 1].trim()
-            if (nextLine.startsWith('- ')) {
-              items.push(nextLine.slice(2).trim())
-              i++
-            } else {
-              break
-            }
-          }
-          if (items.length > 0) {
-            frontmatter.disallowedTools = items
-          }
-        }
+        frontmatter.disallowedTools = parseStringList(value, lines, () => i++, () => lines[i + 1]?.trim())
+        break
+      case 'skills':
+        frontmatter.skills = parseStringList(value, lines, () => i++, () => lines[i + 1]?.trim())
         break
     }
   }
 
   return { frontmatter, body }
+}
+
+function parseStringList(
+  value: string,
+  _lines: string[],
+  advance: () => void,
+  peekNext: () => string | undefined,
+): string[] {
+  if (value.startsWith('[') && value.endsWith(']')) {
+    return value
+      .slice(1, -1)
+      .split(',')
+      .map(cleanListItem)
+      .filter(Boolean)
+  }
+
+  if (value === '') {
+    const items: string[] = []
+    while (true) {
+      const nextLine = peekNext()
+      if (!nextLine?.startsWith('- ')) break
+      items.push(cleanListItem(nextLine.slice(2)))
+      advance()
+    }
+    return items.filter(Boolean)
+  }
+
+  return value.split(',').map(cleanListItem).filter(Boolean)
+}
+
+function cleanListItem(value: string): string {
+  return parseScalarValue(value.trim())
+}
+
+function parseScalarValue(value: string): string {
+  const trimmed = value.trim()
+  if (!trimmed) return ''
+
+  if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+    try {
+      return JSON.parse(trimmed) as string
+    } catch {
+      return trimmed.slice(1, -1)
+    }
+  }
+
+  if (trimmed.startsWith("'") && trimmed.endsWith("'")) {
+    return trimmed.slice(1, -1)
+  }
+
+  return trimmed
 }

@@ -22,7 +22,7 @@ const TEXT_EXTENSIONS = new Set([
   // Documents
   '.txt', '.md', '.rst', '.rtf', '.log',
   // Code
-  '.ts', '.tsx', '.js', '.jsx', '.py', '.rs', '.go', '.java', '.cpp', '.c', '.h', '.hpp',
+  '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.rs', '.go', '.java', '.cpp', '.c', '.h', '.hpp',
   '.rb', '.php', '.swift', '.kt', '.kts', '.sh', '.bash', '.zsh', '.fish',
   '.sql', '.r', '.scala', '.lua', '.pl', '.pm', '.zig', '.nim', '.ex', '.exs',
   '.cs', '.fs', '.vb', '.m', '.mm', '.dart', '.groovy', '.clj', '.cljs', '.erl', '.hs',

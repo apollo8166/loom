@@ -7,7 +7,9 @@ export interface ScheduledTask {
   description: string   // human-readable task description
   schedule: string      // 5-field cron expression
   prompt: string        // legacy task prompt; skill tasks are invoked through SDK skills
-  skillName: string     // '' = custom prompt; non-empty = skill selected
+  agentName: string     // optional main-thread SDK sub-agent to run the task as
+  skillName: string     // legacy single-skill storage; may contain a JSON array for multi-skill tasks
+  skillNames?: string[] // normalized selected SDK skills
   model: string
   enabled: boolean
   lastRunAt: string | null

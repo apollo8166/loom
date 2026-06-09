@@ -1,8 +1,8 @@
-import { resolveProvider } from '@/shared/runtime/provider'
 import { readClaudeMemory, writeMemoryCandidate } from './files'
 import { findDuplicateMemoryCandidate } from './dedupe'
 import type { MemoryCandidate, MemoryScope } from './types'
 import { logger } from '@/shared/logging/logger'
+import { getBackgroundModelCandidates, isUnavailableModelError } from '@/shared/runtime/background-model'
 
 type MemoryMessage = {
   role: 'user' | 'assistant'
@@ -45,6 +45,10 @@ function shouldRetryStatus(status: number): boolean {
   return status === 429 || status === 500 || status === 502 || status === 503 || status === 504
 }
 
+function isUnavailableModelMessage(message: string): boolean {
+  return /model_not_found|No available channel|model.*not.*found|not found/i.test(message)
+}
+
 async function fetchJsonWithRetry(params: {
   label: string
   url: string
@@ -77,12 +81,14 @@ async function fetchJsonWithRetry(params: {
 
       const text = (await res.text()).slice(0, 300)
       lastError = new Error(`Memory extractor ${params.label} request failed (${res.status}): ${text}`)
+      if (isUnavailableModelMessage(text)) throw lastError
       if (!shouldRetryStatus(res.status) || attempt === attempts) throw lastError
     } catch (err) {
       const isAbort = err instanceof Error && err.name === 'AbortError'
       lastError = err instanceof Error
         ? err
         : new Error(String(err))
+      if (isUnavailableModelMessage(lastError.message)) throw lastError
       logMemory(`${params.label}_request_failed`, {
         attempt,
         retryable: isAbort || attempt < attempts,
@@ -298,50 +304,81 @@ async function callMemoryExtractor(params: {
   system: string
   user: string
 }): Promise<ExtractedCandidate[]> {
-  const provider = resolveProvider('claude-haiku-4-5')
-  if (!provider.apiKey) {
-    logMemory('skip_no_api_key', { providerId: provider.providerId, apiFormat: provider.apiFormat })
-    return []
+  const candidates = getBackgroundModelCandidates()
+  let lastError: unknown = null
+
+  for (const candidate of candidates) {
+    const provider = candidate.provider
+    if (!provider.apiKey) {
+      logMemory('skip_no_api_key', {
+        providerId: provider.providerId,
+        apiFormat: provider.apiFormat,
+        tier: candidate.tier,
+      })
+      return []
+    }
+
+    try {
+      logMemory('start', {
+        providerId: provider.providerId,
+        apiFormat: provider.apiFormat || 'anthropic',
+        modelId: candidate.modelId,
+        tier: candidate.tier,
+        baseUrl: safeUrl(provider.upstreamBaseUrl || provider.baseUrl),
+        systemChars: params.system.length,
+        userChars: params.user.length,
+      })
+
+      const response = provider.apiFormat === 'openai'
+        ? await callOpenAIChatCompletions({
+            apiKey: provider.apiKey,
+            baseUrl: provider.upstreamBaseUrl || provider.baseUrl || '',
+            model: candidate.modelId,
+            system: params.system,
+            user: params.user,
+          })
+        : await callAnthropicMessages({
+            apiKey: provider.apiKey,
+            baseUrl: provider.upstreamBaseUrl || provider.baseUrl,
+            model: candidate.modelId,
+            system: params.system,
+            user: params.user,
+          })
+
+      const text = extractTextFromResponse(response)
+      const responseObj = response && typeof response === 'object' ? response as Record<string, unknown> : {}
+      logMemory('response_parsed', {
+        providerId: provider.providerId,
+        modelId: candidate.modelId,
+        tier: candidate.tier,
+        topLevelKeys: Object.keys(responseObj).slice(0, 12),
+        textChars: text.length,
+        textPreview: preview(text),
+      })
+      if (!text.trim()) return []
+      const parsedCandidates = extractJson(text).candidates || []
+      logMemory('candidates_raw', {
+        count: parsedCandidates.length,
+        providerId: provider.providerId,
+        modelId: candidate.modelId,
+        tier: candidate.tier,
+      })
+      return parsedCandidates
+    } catch (err) {
+      lastError = err
+      logMemory('model_attempt_failed', {
+        providerId: provider.providerId,
+        modelId: candidate.modelId,
+        tier: candidate.tier,
+        retryNextModel: isUnavailableModelError(err),
+        error: err instanceof Error ? err.message : String(err),
+      })
+      if (!isUnavailableModelError(err)) throw err
+    }
   }
 
-  const modelId = provider.resolvedModelId ||
-    (provider.providerId === 'anthropic' ? 'claude-haiku-4-5-20251001' : 'claude-haiku-4-5')
-  logMemory('start', {
-    providerId: provider.providerId,
-    apiFormat: provider.apiFormat || 'anthropic',
-    modelId,
-    baseUrl: safeUrl(provider.upstreamBaseUrl || provider.baseUrl),
-    systemChars: params.system.length,
-    userChars: params.user.length,
-  })
-
-  const response = provider.apiFormat === 'openai'
-    ? await callOpenAIChatCompletions({
-        apiKey: provider.apiKey,
-        baseUrl: provider.upstreamBaseUrl || provider.baseUrl || '',
-        model: modelId,
-        system: params.system,
-        user: params.user,
-      })
-    : await callAnthropicMessages({
-        apiKey: provider.apiKey,
-        baseUrl: provider.upstreamBaseUrl || provider.baseUrl,
-        model: modelId,
-        system: params.system,
-        user: params.user,
-      })
-
-  const text = extractTextFromResponse(response)
-  const responseObj = response && typeof response === 'object' ? response as Record<string, unknown> : {}
-  logMemory('response_parsed', {
-    topLevelKeys: Object.keys(responseObj).slice(0, 12),
-    textChars: text.length,
-    textPreview: preview(text),
-  })
-  if (!text.trim()) return []
-  const candidates = extractJson(text).candidates || []
-  logMemory('candidates_raw', { count: candidates.length })
-  return candidates
+  if (lastError) throw lastError
+  return []
 }
 
 export async function extractMemoryCandidatesWithLlm(params: {
@@ -465,33 +502,52 @@ export async function generateCompactSummaryWithLlm(params: {
 }
 
 async function generateCompactSummaryText(messages: MemoryMessage[]): Promise<string> {
-  const provider = resolveProvider('claude-haiku-4-5')
-  if (!provider.apiKey) return ''
-  const modelId = provider.resolvedModelId ||
-    (provider.providerId === 'anthropic' ? 'claude-haiku-4-5-20251001' : 'claude-haiku-4-5')
   const user = `请压缩以下对话，供新上下文继续使用：\n\n${renderMessages(messages)}`
-  const response = provider.apiFormat === 'openai'
-    ? await callOpenAIChatCompletions({
-        apiKey: provider.apiKey,
-        baseUrl: provider.upstreamBaseUrl || provider.baseUrl || '',
-        model: modelId,
-        system: COMPACT_SUMMARY_SYSTEM_PROMPT,
-        user,
+  const candidates = getBackgroundModelCandidates()
+  let lastError: unknown = null
+  for (const candidate of candidates) {
+    const provider = candidate.provider
+    if (!provider.apiKey) return ''
+    try {
+      const response = provider.apiFormat === 'openai'
+        ? await callOpenAIChatCompletions({
+            apiKey: provider.apiKey,
+            baseUrl: provider.upstreamBaseUrl || provider.baseUrl || '',
+            model: candidate.modelId,
+            system: COMPACT_SUMMARY_SYSTEM_PROMPT,
+            user,
+          })
+        : await callAnthropicMessages({
+            apiKey: provider.apiKey,
+            baseUrl: provider.upstreamBaseUrl || provider.baseUrl,
+            model: candidate.modelId,
+            system: COMPACT_SUMMARY_SYSTEM_PROMPT,
+            user,
+          })
+      const text = extractTextFromResponse(response).trim()
+      logMemory('compact_summary_generated', {
+        messageCount: messages.length,
+        summaryChars: text.length,
+        summaryPreview: preview(text),
+        providerId: provider.providerId,
+        modelId: candidate.modelId,
+        tier: candidate.tier,
       })
-    : await callAnthropicMessages({
-        apiKey: provider.apiKey,
-        baseUrl: provider.upstreamBaseUrl || provider.baseUrl,
-        model: modelId,
-        system: COMPACT_SUMMARY_SYSTEM_PROMPT,
-        user,
+      return text
+    } catch (err) {
+      lastError = err
+      logMemory('compact_summary_model_attempt_failed', {
+        providerId: provider.providerId,
+        modelId: candidate.modelId,
+        tier: candidate.tier,
+        retryNextModel: isUnavailableModelError(err),
+        error: err instanceof Error ? err.message : String(err),
       })
-  const text = extractTextFromResponse(response).trim()
-  logMemory('compact_summary_generated', {
-    messageCount: messages.length,
-    summaryChars: text.length,
-    summaryPreview: preview(text),
-  })
-  return text
+      if (!isUnavailableModelError(err)) throw err
+    }
+  }
+  if (lastError) throw lastError
+  return ''
 }
 
 export type { MemoryMessage }

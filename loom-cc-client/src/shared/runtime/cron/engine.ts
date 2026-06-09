@@ -15,6 +15,7 @@ interface RawTask {
   description: string
   schedule: string
   prompt: string
+  agent_name: string
   skill_name: string
   model: string
   enabled: number

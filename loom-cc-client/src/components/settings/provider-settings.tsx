@@ -7,6 +7,7 @@ import type { ProviderConfig } from '@/shared/config/provider-config'
 import type { ModelCatalogEntry } from '@/shared/config/models'
 import { mergeModelCatalog } from '@/shared/config/model-catalog'
 import type { CustomModelCatalogs } from '@/shared/config/model-catalog'
+import { formatContextWindowTokens, normalizeContextWindowTokens } from '@/shared/config/context-window'
 
 const PROVIDER_LABELS: Record<string, string> = {
   anthropic: 'Anthropic',
@@ -28,7 +29,7 @@ export function ProviderSettings() {
   const [showKey, setShowKey] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [customCatalogs, setCustomCatalogs] = useState<CustomModelCatalogs>({})
-  const [newModel, setNewModel] = useState({ id: '', label: '', tier: 'main' as ModelCatalogEntry['tier'] })
+  const [newModel, setNewModel] = useState({ id: '', label: '', tier: 'main' as ModelCatalogEntry['tier'], contextWindowTokens: '' })
   const [testState, setTestState] = useState<
     { status: 'idle' } | { status: 'testing' } | { status: 'ok' } | { status: 'error'; message: string }
   >({ status: 'idle' })
@@ -60,7 +61,7 @@ export function ProviderSettings() {
     setActiveTabId(id)
     setShowKey(false)
     setSaveMsg(null)
-    setNewModel({ id: '', label: '', tier: 'main' })
+    setNewModel({ id: '', label: '', tier: 'main', contextWindowTokens: '' })
     setTestState({ status: 'idle' })
   }
 
@@ -122,18 +123,20 @@ export function ProviderSettings() {
   const addCustomModel = () => {
     const id = newModel.id.trim()
     if (!id) return
+    const contextWindowTokens = normalizeContextWindowTokens(newModel.contextWindowTokens)
     const entry: ModelCatalogEntry = {
       id,
       label: newModel.label.trim() || id,
       tier: newModel.tier,
     }
+    if (contextWindowTokens) entry.contextWindowTokens = contextWindowTokens
     setCustomCatalogs(prev => {
       const next = { ...prev }
       const existing = next[activeTabId] ?? []
       next[activeTabId] = [...existing.filter(m => m.id !== entry.id), entry]
       return next
     })
-    setNewModel({ id: '', label: '', tier: 'main' })
+    setNewModel({ id: '', label: '', tier: 'main', contextWindowTokens: '' })
     setSaveMsg(null)
   }
 
@@ -283,30 +286,33 @@ export function ProviderSettings() {
           <ModelRow
             label="快速 (Haiku 层)"
             value={activeConfig.fastModel || ''}
+            contextWindowTokens={activeConfig.fastContextWindowTokens}
             catalog={catalog}
-            isAnthropic={isAnthropic}
-            onChange={v => updateActiveConfig({ fastModel: v })}
+            onChange={v => updateActiveConfig({ fastModel: v, fastContextWindowTokens: undefined })}
+            onContextWindowChange={v => updateActiveConfig({ fastContextWindowTokens: normalizeContextWindowTokens(v) })}
           />
           <ModelRow
             label="主力 (Sonnet 层)"
             value={activeConfig.mainModel || ''}
+            contextWindowTokens={activeConfig.mainContextWindowTokens}
             catalog={catalog}
-            isAnthropic={isAnthropic}
-            onChange={v => updateActiveConfig({ mainModel: v })}
+            onChange={v => updateActiveConfig({ mainModel: v, mainContextWindowTokens: undefined })}
+            onContextWindowChange={v => updateActiveConfig({ mainContextWindowTokens: normalizeContextWindowTokens(v) })}
           />
           <ModelRow
             label="强力 (Opus 层)"
             value={activeConfig.heavyModel || ''}
+            contextWindowTokens={activeConfig.heavyContextWindowTokens}
             catalog={catalog}
-            isAnthropic={isAnthropic}
-            onChange={v => updateActiveConfig({ heavyModel: v })}
+            onChange={v => updateActiveConfig({ heavyModel: v, heavyContextWindowTokens: undefined })}
+            onContextWindowChange={v => updateActiveConfig({ heavyContextWindowTokens: normalizeContextWindowTokens(v) })}
           />
         </div>
 
         {/* Custom Models */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <label style={{ fontSize: 11, letterSpacing: '0.04em', color: 'var(--color-text-muted)' }}>自定义模型</label>
-          <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 90px 34px', gap: 8, alignItems: 'center' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 90px 110px 34px', gap: 8, alignItems: 'center' }}>
             <input
               value={newModel.id}
               onChange={e => setNewModel(prev => ({ ...prev, id: e.target.value }))}
@@ -331,6 +337,13 @@ export function ProviderSettings() {
               <option value="main">main</option>
               <option value="heavy">heavy</option>
             </select>
+            <input
+              value={newModel.contextWindowTokens}
+              onChange={e => setNewModel(prev => ({ ...prev, contextWindowTokens: e.target.value }))}
+              placeholder="窗口 tokens"
+              className="text-xs rounded-md px-2.5 py-1 outline-none"
+              style={{ color: 'var(--color-text-secondary)', background: 'var(--color-bg-input)', border: '1px solid var(--color-border-strong)' }}
+            />
             <button
               onClick={addCustomModel}
               disabled={!newModel.id.trim()}
@@ -362,6 +375,11 @@ export function ProviderSettings() {
                   <span style={{ flex: 1, minWidth: 0, fontSize: 12, fontFamily: 'monospace', color: 'var(--color-text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{model.id}</span>
                   <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>{model.label}</span>
                   <span style={{ fontSize: 10, color: 'var(--color-accent-primary)', border: '1px solid rgba(245,158,11,0.28)', borderRadius: 999, padding: '1px 7px' }}>{model.tier}</span>
+                  {model.contextWindowTokens && (
+                    <span style={{ fontSize: 10, color: 'var(--color-text-muted)', border: '1px solid var(--color-border-subtle)', borderRadius: 999, padding: '1px 7px' }}>
+                      {formatContextWindowTokens(model.contextWindowTokens)}
+                    </span>
+                  )}
                   <button
                     onClick={() => removeCustomModel(model.id)}
                     title="删除模型"
@@ -468,28 +486,18 @@ export function ProviderSettings() {
 /* ── Model Row Sub-component ──────────────────────────────────────── */
 
 function ModelRow({
-  label, value, catalog, isAnthropic, onChange,
+  label, value, contextWindowTokens, catalog, onChange, onContextWindowChange,
 }: {
   label: string
   value: string
-  catalog: { id: string; label: string }[]
-  isAnthropic: boolean
+  contextWindowTokens?: number
+  catalog: { id: string; label: string; contextWindowTokens?: number }[]
   onChange: (v: string) => void
+  onContextWindowChange: (v: string) => void
 }) {
-  if (isAnthropic) {
-    return (
-      <div className="flex items-center gap-2 py-1.5">
-        <span className="text-[11px] w-[140px] shrink-0" style={{ color: 'var(--color-text-muted)' }}>{label}</span>
-        <span className="text-xs px-2.5 py-1 rounded-md" style={{
-          color: 'var(--color-text-disabled)',
-          background: 'var(--color-bg-surface-high)',
-          border: '1px solid var(--color-border-subtle)',
-        }}>
-          {value}
-        </span>
-      </div>
-    )
-  }
+  const windowValue = contextWindowTokens ? String(contextWindowTokens) : ''
+  const selectedCatalogWindow = catalog.find(m => m.id === value)?.contextWindowTokens
+  const displayWindow = contextWindowTokens || selectedCatalogWindow
 
   if (catalog.length > 0) {
     return (
@@ -509,6 +517,20 @@ function ModelRow({
           {catalog.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
           {value && !catalog.find(m => m.id === value) && <option value={value}>{value}</option>}
         </select>
+        <input
+          type="number"
+          min={1}
+          value={windowValue}
+          onChange={e => onContextWindowChange(e.target.value)}
+          placeholder={displayWindow ? formatContextWindowTokens(displayWindow) : '默认窗口'}
+          title="上下文窗口 tokens；留空使用模型内置值或全局默认值"
+          className="w-[118px] text-xs rounded-md px-2.5 py-1 outline-none"
+          style={{
+            color: 'var(--color-text-secondary)',
+            background: 'var(--color-bg-input)',
+            border: '1px solid var(--color-border-strong)',
+          }}
+        />
       </div>
     )
   }
@@ -522,6 +544,20 @@ function ModelRow({
         onChange={e => onChange(e.target.value)}
         placeholder="模型 ID"
         className="flex-1 text-xs rounded-md px-2.5 py-1 outline-none"
+        style={{
+          color: 'var(--color-text-secondary)',
+          background: 'var(--color-bg-input)',
+          border: '1px solid var(--color-border-strong)',
+        }}
+      />
+      <input
+        type="number"
+        min={1}
+        value={windowValue}
+        onChange={e => onContextWindowChange(e.target.value)}
+        placeholder={displayWindow ? formatContextWindowTokens(displayWindow) : '默认窗口'}
+        title="上下文窗口 tokens；留空使用模型内置值或全局默认值"
+        className="w-[118px] text-xs rounded-md px-2.5 py-1 outline-none"
         style={{
           color: 'var(--color-text-secondary)',
           background: 'var(--color-bg-input)',

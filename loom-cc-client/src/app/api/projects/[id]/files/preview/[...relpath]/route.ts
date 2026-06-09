@@ -15,7 +15,7 @@ export const dynamic = 'force-dynamic'
 
 function detectLanguage(ext: string): string {
   const map: Record<string, string> = {
-    ts: 'typescript', tsx: 'tsx', js: 'javascript', jsx: 'jsx',
+    ts: 'typescript', tsx: 'tsx', js: 'javascript', jsx: 'jsx', mjs: 'javascript', cjs: 'javascript',
     py: 'python', rs: 'rust', go: 'go', java: 'java',
     cpp: 'cpp', c: 'c', h: 'c', cs: 'csharp',
     rb: 'ruby', php: 'php', swift: 'swift', kt: 'kotlin',

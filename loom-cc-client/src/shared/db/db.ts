@@ -9,7 +9,7 @@ declare const globalThis: {
 } & typeof global
 
 /** Schema version — bump when adding new tables/columns */
-const SCHEMA_VERSION = 11
+const SCHEMA_VERSION = 14
 
 export const GLOBAL_CHAT_PROJECT_ID = '__global_chat__'
 
@@ -146,6 +146,7 @@ function applySchema(db: Database.Database) {
       name            TEXT NOT NULL,
       schedule        TEXT NOT NULL,
       prompt          TEXT NOT NULL DEFAULT '',
+      agent_name      TEXT NOT NULL DEFAULT '',
       model           TEXT NOT NULL DEFAULT '',
       enabled         INTEGER NOT NULL DEFAULT 1,
       last_run_at     TEXT,
@@ -251,6 +252,114 @@ function applySchema(db: Database.Database) {
 
     CREATE INDEX IF NOT EXISTS idx_skill_runs_project
       ON skill_runs(project_id, started_at DESC);
+
+    -- ── IM bridge ───────────────────────────────────────────────────────────
+
+    CREATE TABLE IF NOT EXISTS im_channels (
+      id               TEXT PRIMARY KEY,
+      type             TEXT NOT NULL DEFAULT 'feishu'
+                         CHECK (type IN ('feishu')),
+      project_id       TEXT NOT NULL DEFAULT '',
+      enabled          INTEGER NOT NULL DEFAULT 0,
+      status           TEXT NOT NULL DEFAULT 'not_configured'
+                         CHECK (status IN ('connected', 'connecting', 'disconnected', 'not_configured', 'error')),
+      credentials      TEXT NOT NULL DEFAULT '{}',
+      dm_policy        TEXT NOT NULL DEFAULT 'open'
+                         CHECK (dm_policy IN ('open', 'allowlist', 'disabled')),
+      group_policy     TEXT NOT NULL DEFAULT 'mention'
+                         CHECK (group_policy IN ('mention', 'open', 'allowlist', 'disabled')),
+      trigger_mode     TEXT NOT NULL DEFAULT 'mention'
+                         CHECK (trigger_mode IN ('mention', 'all')),
+      sender_whitelist TEXT NOT NULL DEFAULT '[]',
+      group_whitelist  TEXT NOT NULL DEFAULT '[]',
+      default_project_id TEXT NOT NULL DEFAULT '',
+      default_model    TEXT NOT NULL DEFAULT '',
+      permission_mode  TEXT NOT NULL DEFAULT 'confirm'
+                         CHECK (permission_mode IN ('confirm', 'read-only', 'full')),
+      last_connected_at TEXT,
+      last_error       TEXT NOT NULL DEFAULT '',
+      created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+      updated_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    );
+  `)
+  // Existing v12 databases created before project-scoped channels need this
+  // column before the project/type index can be created.
+  try { db.exec(`ALTER TABLE im_channels ADD COLUMN project_id TEXT NOT NULL DEFAULT ''`) } catch { /* already exists */ }
+
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_im_channels_project_type
+      ON im_channels(project_id, type)
+      WHERE project_id != '';
+
+    CREATE TABLE IF NOT EXISTS im_channel_bindings (
+      id          TEXT PRIMARY KEY,
+      channel_id  TEXT NOT NULL,
+      chat_id     TEXT NOT NULL,
+      chat_name   TEXT NOT NULL DEFAULT '',
+      project_id  TEXT NOT NULL,
+      session_id  TEXT NOT NULL,
+      created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+      updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+      UNIQUE(channel_id, chat_id),
+      FOREIGN KEY (channel_id) REFERENCES im_channels(id) ON DELETE CASCADE,
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+      FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_im_bindings_project ON im_channel_bindings(project_id);
+    CREATE INDEX IF NOT EXISTS idx_im_bindings_session ON im_channel_bindings(session_id);
+
+    CREATE TABLE IF NOT EXISTS im_message_dedupe (
+      message_key TEXT PRIMARY KEY,
+      channel_id  TEXT NOT NULL,
+      chat_id     TEXT NOT NULL,
+      created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS im_audit_logs (
+      id          TEXT PRIMARY KEY,
+      channel_id  TEXT NOT NULL DEFAULT '',
+      chat_id     TEXT NOT NULL DEFAULT '',
+      project_id  TEXT NOT NULL DEFAULT '',
+      session_id  TEXT NOT NULL DEFAULT '',
+      action      TEXT NOT NULL,
+      status      TEXT NOT NULL DEFAULT 'ok',
+      details     TEXT NOT NULL DEFAULT '{}',
+      created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_im_audit_logs_time ON im_audit_logs(created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS im_permission_requests (
+      id          TEXT PRIMARY KEY,
+      channel_id  TEXT NOT NULL,
+      chat_id     TEXT NOT NULL,
+      sender_id   TEXT NOT NULL DEFAULT '',
+      session_id  TEXT NOT NULL DEFAULT '',
+      tool_name   TEXT NOT NULL DEFAULT '',
+      tool_input  TEXT NOT NULL DEFAULT '{}',
+      status      TEXT NOT NULL DEFAULT 'pending'
+                  CHECK (status IN ('pending', 'allowed', 'denied', 'timeout')),
+      created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+      updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_im_permission_requests_status ON im_permission_requests(status, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS runtime_events (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      scope      TEXT NOT NULL CHECK (scope IN ('session', 'project')),
+      scope_id   TEXT NOT NULL,
+      event_type TEXT NOT NULL DEFAULT '',
+      payload    TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_runtime_events_scope
+      ON runtime_events(scope, scope_id, id);
+
+    CREATE INDEX IF NOT EXISTS idx_runtime_events_created
+      ON runtime_events(created_at);
 
     CREATE TABLE IF NOT EXISTS project_rules (
       id                       TEXT PRIMARY KEY,
@@ -469,6 +578,7 @@ function runIncrementalMigrations(db: Database.Database) {
   // v3: scheduled_tasks description + skill_name
   try { db.exec(`ALTER TABLE scheduled_tasks ADD COLUMN description TEXT NOT NULL DEFAULT ''`) } catch { /* already exists */ }
   try { db.exec(`ALTER TABLE scheduled_tasks ADD COLUMN skill_name TEXT NOT NULL DEFAULT ''`) } catch { /* already exists */ }
+  try { db.exec(`ALTER TABLE scheduled_tasks ADD COLUMN agent_name TEXT NOT NULL DEFAULT ''`) } catch { /* already exists */ }
   // v4: per-session workspace override
   try { db.exec(`ALTER TABLE sessions ADD COLUMN workspace_path TEXT`) } catch { /* already exists */ }
   // v5: standalone Chat primary workspace + extra context folders
@@ -758,7 +868,116 @@ function runIncrementalMigrations(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_negative_priors_project
       ON negative_priors(project_id, prior_key, created_at DESC);
   `)
+  // v12: Feishu-only IM bridge.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS im_channels (
+      id               TEXT PRIMARY KEY,
+      type             TEXT NOT NULL DEFAULT 'feishu'
+                         CHECK (type IN ('feishu')),
+      project_id       TEXT NOT NULL DEFAULT '',
+      enabled          INTEGER NOT NULL DEFAULT 0,
+      status           TEXT NOT NULL DEFAULT 'not_configured'
+                         CHECK (status IN ('connected', 'connecting', 'disconnected', 'not_configured', 'error')),
+      credentials      TEXT NOT NULL DEFAULT '{}',
+      dm_policy        TEXT NOT NULL DEFAULT 'open'
+                         CHECK (dm_policy IN ('open', 'allowlist', 'disabled')),
+      group_policy     TEXT NOT NULL DEFAULT 'mention'
+                         CHECK (group_policy IN ('mention', 'open', 'allowlist', 'disabled')),
+      trigger_mode     TEXT NOT NULL DEFAULT 'mention'
+                         CHECK (trigger_mode IN ('mention', 'all')),
+      sender_whitelist TEXT NOT NULL DEFAULT '[]',
+      group_whitelist  TEXT NOT NULL DEFAULT '[]',
+      default_project_id TEXT NOT NULL DEFAULT '',
+      default_model    TEXT NOT NULL DEFAULT '',
+      permission_mode  TEXT NOT NULL DEFAULT 'confirm'
+                         CHECK (permission_mode IN ('confirm', 'read-only', 'full')),
+      last_connected_at TEXT,
+      last_error       TEXT NOT NULL DEFAULT '',
+      created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+      updated_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    );
+  `)
+  // v13: IM channels are project-scoped. Legacy v12 rows can remain inert,
+  // but the column must exist before creating the project/type index.
+  try { db.exec(`ALTER TABLE im_channels ADD COLUMN project_id TEXT NOT NULL DEFAULT ''`) } catch { /* already exists */ }
+
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_im_channels_project_type
+      ON im_channels(project_id, type)
+      WHERE project_id != '';
+
+    CREATE TABLE IF NOT EXISTS im_channel_bindings (
+      id          TEXT PRIMARY KEY,
+      channel_id  TEXT NOT NULL,
+      chat_id     TEXT NOT NULL,
+      chat_name   TEXT NOT NULL DEFAULT '',
+      project_id  TEXT NOT NULL,
+      session_id  TEXT NOT NULL,
+      created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+      updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+      UNIQUE(channel_id, chat_id),
+      FOREIGN KEY (channel_id) REFERENCES im_channels(id) ON DELETE CASCADE,
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+      FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_im_bindings_project ON im_channel_bindings(project_id);
+    CREATE INDEX IF NOT EXISTS idx_im_bindings_session ON im_channel_bindings(session_id);
+
+    CREATE TABLE IF NOT EXISTS im_message_dedupe (
+      message_key TEXT PRIMARY KEY,
+      channel_id  TEXT NOT NULL,
+      chat_id     TEXT NOT NULL,
+      created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS im_audit_logs (
+      id          TEXT PRIMARY KEY,
+      channel_id  TEXT NOT NULL DEFAULT '',
+      chat_id     TEXT NOT NULL DEFAULT '',
+      project_id  TEXT NOT NULL DEFAULT '',
+      session_id  TEXT NOT NULL DEFAULT '',
+      action      TEXT NOT NULL,
+      status      TEXT NOT NULL DEFAULT 'ok',
+      details     TEXT NOT NULL DEFAULT '{}',
+      created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_im_audit_logs_time ON im_audit_logs(created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS im_permission_requests (
+      id          TEXT PRIMARY KEY,
+      channel_id  TEXT NOT NULL,
+      chat_id     TEXT NOT NULL,
+      sender_id   TEXT NOT NULL DEFAULT '',
+      session_id  TEXT NOT NULL DEFAULT '',
+      tool_name   TEXT NOT NULL DEFAULT '',
+      tool_input  TEXT NOT NULL DEFAULT '{}',
+      status      TEXT NOT NULL DEFAULT 'pending'
+                  CHECK (status IN ('pending', 'allowed', 'denied', 'timeout')),
+      created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+      updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_im_permission_requests_status ON im_permission_requests(status, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS runtime_events (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      scope      TEXT NOT NULL CHECK (scope IN ('session', 'project')),
+      scope_id   TEXT NOT NULL,
+      event_type TEXT NOT NULL DEFAULT '',
+      payload    TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_runtime_events_scope
+      ON runtime_events(scope, scope_id, id);
+
+    CREATE INDEX IF NOT EXISTS idx_runtime_events_created
+      ON runtime_events(created_at);
+  `)
   migrateLegacySessionWorkspaceArrays(db)
+  db.pragma(`user_version = ${SCHEMA_VERSION}`)
 }
 
 function migrateLegacySessionWorkspaceArrays(db: Database.Database) {

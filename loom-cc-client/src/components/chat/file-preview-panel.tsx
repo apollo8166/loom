@@ -50,8 +50,8 @@ function isExcelLike(ext: string) {
 function isTextLike(name: string) {
   const ext = getExt(name)
   return ['md', 'mdx', 'txt', 'csv', 'json', 'yaml', 'yml', 'toml', 'xml', 'html', 'htm', 'css', 'scss',
-    'ts', 'tsx', 'js', 'jsx', 'py', 'rs', 'go', 'java', 'cpp', 'c', 'h', 'cs', 'rb', 'php',
-    'swift', 'kt', 'sh', 'bash', 'sql'].includes(ext)
+    'ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'py', 'rs', 'go', 'java', 'cpp', 'c', 'h', 'cs', 'rb', 'php',
+    'swift', 'kt', 'sh', 'bash', 'zsh', 'sql', 'env'].includes(ext)
 }
 
 function isMarkdown(name: string) {

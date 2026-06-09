@@ -1,5 +1,6 @@
-import { getLatestProjectDossier, rebuildProjectDossierDeterministic } from './dossier-store'
+import { cleanProjectDossier, getLatestProjectDossier, rebuildProjectDossierDeterministic } from './dossier-store'
 import { listRecentObservations } from './observation-store'
+import { filterCoveredRecentObservations } from './observation-visibility'
 import { listProjectRules } from './rule-store'
 import { listSemanticMemories } from './semantic-memory-store'
 import { keywords, preview } from './text'
@@ -65,26 +66,32 @@ export function buildEvolutionInjectionContext(params: {
   if (params.enabled === false || !params.workspacePath) {
     return { dossier: null, semanticMemories: [], recentObservations: [], activeRules: [], chars: 0, rendered: '' }
   }
-  const dossier = getLatestProjectDossier(params) || rebuildProjectDossierDeterministic({
+  const dossier = cleanProjectDossier(getLatestProjectDossier(params) || rebuildProjectDossierDeterministic({
+    projectId: params.projectId,
+    workspacePath: params.workspacePath,
+    source: 'injection',
+  })) || rebuildProjectDossierDeterministic({
     projectId: params.projectId,
     workspacePath: params.workspacePath,
     source: 'injection',
   })
-  const semanticMemories = rankSemanticMemories(
-    listSemanticMemories({
-      projectId: params.projectId,
-      workspacePath: params.workspacePath,
-      statuses: ['active', 'stale'],
-      limit: 80,
-    }),
-    params.userMessage || '',
-  ).slice(0, 6)
-  const recentObservations = listRecentObservations({
+  const allSemanticMemories = listSemanticMemories({
     projectId: params.projectId,
     workspacePath: params.workspacePath,
-    statuses: ['active'],
-    limit: 3,
+    statuses: ['active', 'stale'],
+    limit: 80,
   })
+  const semanticMemories = rankSemanticMemories(allSemanticMemories, params.userMessage || '').slice(0, 6)
+  const recentObservations = filterCoveredRecentObservations({
+    observations: listRecentObservations({
+      projectId: params.projectId,
+      workspacePath: params.workspacePath,
+      statuses: ['active'],
+      limit: 12,
+    }),
+    semanticMemories,
+    dossier,
+  }).slice(0, 3)
   const activeRules = rankRules(
     listProjectRules({
       projectId: params.projectId,

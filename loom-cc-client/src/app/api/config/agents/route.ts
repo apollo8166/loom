@@ -6,7 +6,13 @@ import os from 'os'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export interface AgentEntry { name: string; description: string; source: 'project' | 'global' }
+export interface AgentEntry {
+  id: string
+  filename: string
+  name: string
+  description: string
+  source: 'project' | 'global'
+}
 
 function resolveWorkspaceDir(): string {
   if (process.env.LOOM_WORKSPACE_DIR) return process.env.LOOM_WORKSPACE_DIR
@@ -66,8 +72,11 @@ function readAgentsFrom(claudeDir: string, source: 'project' | 'global'): AgentE
     if (!entry.isFile() || !entry.name.endsWith('.md')) continue
     try {
       const fm = parseFrontmatter(fs.readFileSync(path.join(agentsDir, entry.name), 'utf-8'))
+      const id = entry.name.replace(/\.md$/, '')
       results.push({
-        name: fm.name || entry.name.replace('.md', ''),
+        id,
+        filename: entry.name,
+        name: fm.name || id,
         description: fm.description || '',
         source,
       })
@@ -87,7 +96,7 @@ export async function GET(req: Request) {
   for (const [dir, src] of [[project, 'project'], [globalDir, 'global']] as [string | null, 'project' | 'global'][]) {
     if (!dir) continue
     for (const a of readAgentsFrom(dir, src)) {
-      if (!seen.has(a.name)) { seen.add(a.name); agents.push(a) }
+      if (!seen.has(a.id)) { seen.add(a.id); agents.push(a) }
     }
   }
 

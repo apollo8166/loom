@@ -1,5 +1,6 @@
 import { PROVIDER_MODEL_CATALOGS } from './models'
 import type { ModelCatalogEntry } from './models'
+import { normalizeContextWindowTokens } from './context-window'
 
 export type CustomModelCatalogs = Record<string, ModelCatalogEntry[]>
 
@@ -10,7 +11,8 @@ export function normalizeModelEntry(entry: Partial<ModelCatalogEntry>): ModelCat
   if (!id) return null
   const label = String(entry.label ?? '').trim() || id
   const tier = entry.tier === 'fast' || entry.tier === 'heavy' ? entry.tier : 'main'
-  return { id, label, tier }
+  const contextWindowTokens = normalizeContextWindowTokens(entry.contextWindowTokens)
+  return contextWindowTokens ? { id, label, tier, contextWindowTokens } : { id, label, tier }
 }
 
 export function mergeModelCatalog(

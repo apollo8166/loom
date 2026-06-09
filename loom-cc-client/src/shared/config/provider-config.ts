@@ -15,6 +15,9 @@ export interface ProviderConfig {
   fastModel: string         // haiku tier  -> background / sub-agent tasks
   mainModel: string         // sonnet tier -> primary tasks
   heavyModel: string        // opus tier   -> complex reasoning
+  fastContextWindowTokens?: number
+  mainContextWindowTokens?: number
+  heavyContextWindowTokens?: number
   supportsThinking: boolean
   supportsVision: boolean
   supportsPDF: boolean
@@ -28,7 +31,7 @@ export const PROVIDER_PRESETS: Record<string, Omit<ProviderConfig, 'apiKey'>> = 
     id: 'anthropic',
     name: 'Anthropic',
     baseUrl: '',
-    fastModel: 'claude-haiku-4-5',
+    fastModel: 'claude-haiku-4-5-20251001',
     mainModel: 'claude-sonnet-4-6',
     heavyModel: 'claude-opus-4-6',
     supportsThinking: true,
@@ -117,6 +120,24 @@ export const PROVIDER_ORDER = ['anthropic', 'deepseek', 'qwen', 'glm', 'doubao',
 const KEY_ACTIVE = 'active_provider_id'
 const KEY_CONFIGS = 'provider_configs'
 
+const ANTHROPIC_MODEL_ALIASES: Record<string, string> = {
+  'claude-haiku-4-5': 'claude-haiku-4-5-20251001',
+}
+
+function normalizeProviderConfig(config: ProviderConfig): ProviderConfig {
+  const preset = PROVIDER_PRESETS[config.id]
+  const next: ProviderConfig = {
+    ...config,
+    apiFormat: config.apiFormat ?? preset?.apiFormat ?? 'openai',
+  }
+  if (config.id === 'anthropic') {
+    next.fastModel = ANTHROPIC_MODEL_ALIASES[next.fastModel] ?? next.fastModel
+    next.mainModel = ANTHROPIC_MODEL_ALIASES[next.mainModel] ?? next.mainModel
+    next.heavyModel = ANTHROPIC_MODEL_ALIASES[next.heavyModel] ?? next.heavyModel
+  }
+  return next
+}
+
 function dbGet(db: Database.Database, key: string): string | null {
   const row = db.prepare('SELECT value FROM app_settings WHERE key = ?').get(key) as { value: string } | undefined
   return row?.value ?? null
@@ -144,10 +165,7 @@ export function getAllProviderConfigs(db: Database.Database): ProviderConfig[] {
     try {
       const parsed = JSON.parse(raw) as ProviderConfig[]
       // Backfill apiFormat for configs saved before this field was added
-      const existing = parsed.map(c => ({
-        ...c,
-        apiFormat: c.apiFormat ?? PROVIDER_PRESETS[c.id]?.apiFormat ?? 'openai',
-      }))
+      const existing = parsed.map(c => normalizeProviderConfig(c))
       // Backfill any new providers added to PROVIDER_ORDER after the user last saved
       const existingIds = new Set(existing.map(c => c.id))
       const backfilled = PROVIDER_ORDER
@@ -172,7 +190,7 @@ export function getAllProviderConfigs(db: Database.Database): ProviderConfig[] {
 }
 
 export function saveAllProviderConfigs(db: Database.Database, configs: ProviderConfig[]): void {
-  dbSet(db, KEY_CONFIGS, JSON.stringify(configs))
+  dbSet(db, KEY_CONFIGS, JSON.stringify(configs.map(c => normalizeProviderConfig(c))))
 }
 
 export function getActiveProviderConfig(db: Database.Database): ProviderConfig {
@@ -195,10 +213,10 @@ export function mapModelToProvider(claudeModelId: string, config: ProviderConfig
   // Session/project state must not pin native provider model IDs. If older data
   // contains a native ID such as gpt-5.4, treat it as the provider's main tier so
   // the concrete model still follows the current global provider settings.
+  const normalized = claudeModelId.toLowerCase()
   if (!/claude|haiku|sonnet|opus/i.test(claudeModelId)) return config.mainModel || claudeModelId
-  if (isAnthropicProvider(config)) return claudeModelId
-  if (claudeModelId.includes('haiku'))  return config.fastModel  || claudeModelId
-  if (claudeModelId.includes('sonnet')) return config.mainModel  || claudeModelId
-  if (claudeModelId.includes('opus'))   return config.heavyModel || claudeModelId
+  if (normalized.includes('haiku'))  return config.fastModel  || claudeModelId
+  if (normalized.includes('sonnet')) return config.mainModel  || claudeModelId
+  if (normalized.includes('opus'))   return config.heavyModel || claudeModelId
   return config.mainModel || claudeModelId
 }

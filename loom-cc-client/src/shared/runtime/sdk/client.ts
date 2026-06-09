@@ -19,7 +19,7 @@ import fs from 'fs'
 import path from 'path'
 import os from 'os'
 import { resolveProvider } from '@/shared/runtime/provider'
-import { getApiModelId, getModelEntry } from '@/shared/config/models'
+import { getModelEntry } from '@/shared/config/models'
 import { LOOM_TOOL_RULES, buildEnvironmentPrompt } from './system-prompt'
 import { getDefaultWorkspacesDir } from '@/shared/db/paths'
 import { logger } from '@/shared/logging/logger'
@@ -294,6 +294,7 @@ export interface LoomQueryOptions {
   resumeSession?: boolean
   thinkingMode?: string
   attachments?: LoomAttachment[]
+  agentName?: string
   enabledSkills?: string[]
   additionalDirectories?: string[]
   planMode?: boolean
@@ -339,6 +340,26 @@ function buildSdkRuntimeSettings(): Options['settings'] {
     autoCompactEnabled,
     ...(autoCompactWindow ? { autoCompactWindow } : {}),
   }
+}
+
+function inspectProjectCustomization(cwd: string): { claudeMdDetected: boolean; agentFileCount: number } {
+  const claudeMdDetected = fs.existsSync(path.join(cwd, '.claude', 'CLAUDE.md')) ||
+    fs.existsSync(path.join(cwd, 'CLAUDE.md'))
+  const agentsDir = path.join(cwd, '.claude', 'agents')
+
+  let agentFileCount = 0
+  try {
+    if (fs.existsSync(agentsDir)) {
+      agentFileCount = fs.readdirSync(agentsDir).filter(file => file.endsWith('.md')).length
+    }
+  } catch (err) {
+    logger.warn('runtime.sdk.project_customization_inspect_failed', {
+      path: agentsDir,
+      error: err instanceof Error ? err.message : String(err),
+    })
+  }
+
+  return { claudeMdDetected, agentFileCount }
 }
 
 function buildSystemPromptAppend(modelId: string, cwd: string): string {
@@ -414,6 +435,9 @@ export function createLoomQuery(opts: LoomQueryOptions): Query {
   const systemPromptAppend = buildSystemPromptAppend(opts.model, cwd)
   const sdkEnv = buildSdkEnv(resolved.apiKey, resolved.baseUrl)
   const claudePath = findClaudeExecutable()
+  const runtimeSettings = buildSdkRuntimeSettings()
+  const runtimeSettingsLog = runtimeSettings as { autoCompactEnabled?: boolean; autoCompactWindow?: number }
+  const projectCustomization = inspectProjectCustomization(cwd)
 
   const isClaudeDirWrite = (input: Record<string, unknown>): boolean => {
     const filePath = String(input.file_path || input.path || '')
@@ -421,7 +445,7 @@ export function createLoomQuery(opts: LoomQueryOptions): Query {
   }
 
   const sdkOptions: Options = {
-    model: resolved.resolvedModelId || getApiModelId(opts.model) || opts.model,
+    model: resolved.resolvedModelId || opts.model,
     cwd,
     systemPrompt: {
       type: 'preset',
@@ -435,7 +459,8 @@ export function createLoomQuery(opts: LoomQueryOptions): Query {
       : { sessionId: opts.sessionId, persistSession: true }),
     includePartialMessages: true,
     agentProgressSummaries: true,
-    settings: buildSdkRuntimeSettings(),
+    ...(opts.agentName ? { agent: opts.agentName } : {}),
+    settings: runtimeSettings,
     toolConfig: {
       askUserQuestion: { previewFormat: 'html' },
     },
@@ -453,6 +478,34 @@ export function createLoomQuery(opts: LoomQueryOptions): Query {
       sdkOptions.thinking = thinkingConfig.thinking
     }
   }
+
+  logger.info('runtime.sdk.query_options', {
+    sessionId: opts.sessionId,
+    providerId: resolved.providerId,
+    apiFormat: resolved.apiFormat,
+    model: opts.model,
+    resolvedModelId: sdkOptions.model,
+    resumeSession: Boolean(opts.resumeSession),
+    hasAgent: Boolean(opts.agentName),
+    agentName: opts.agentName,
+    projectClaudeMdDetected: projectCustomization.claudeMdDetected,
+    projectAgentFileCount: projectCustomization.agentFileCount,
+    projectCustomizationLoading: 'sdk-default',
+    enabledSkillCount: opts.enabledSkills?.length ?? 0,
+    attachmentCount: opts.attachments?.length ?? 0,
+    additionalDirectoryCount: opts.additionalDirectories?.length ?? 0,
+    planMode: Boolean(opts.planMode),
+    useWorktree: Boolean(opts.useWorktree),
+    supportsThinking,
+    thinkingMode: opts.thinkingMode || 'auto',
+    sdkThinkingType: sdkOptions.thinking?.type,
+    includePartialMessages: sdkOptions.includePartialMessages,
+    agentProgressSummaries: sdkOptions.agentProgressSummaries === true,
+    autoCompactEnabled: runtimeSettingsLog.autoCompactEnabled,
+    autoCompactWindow: runtimeSettingsLog.autoCompactWindow,
+    hasCanUseTool: Boolean(opts.canUseTool),
+    hasAskUserQuestionHook: Boolean(opts.askUserQuestionHook),
+  })
 
   if (opts.askUserQuestionHook) {
     sdkOptions.hooks = {

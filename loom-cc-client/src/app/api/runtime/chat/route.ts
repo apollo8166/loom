@@ -25,8 +25,9 @@ import {
   STORED_TOOL_RESULT_MAX_CHARS,
 } from '@/shared/runtime/context-budget'
 import type { Query } from '@anthropic-ai/claude-agent-sdk'
-import type { SDKControlGetContextUsageResponse } from '@anthropic-ai/claude-agent-sdk'
 import { logger } from '@/shared/logging/logger'
+import { publishProjectEvent, publishSessionEvent } from '@/shared/runtime/session-events'
+import { registerActiveRun } from '@/shared/runtime/active-runs'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -45,147 +46,6 @@ async function drainQuery(
       await emit(event as Record<string, unknown>)
     }
     await onMessage?.(msg as unknown as Record<string, unknown>)
-  }
-}
-
-function sanitizeSdkContextUsage(
-  usage: SDKControlGetContextUsageResponse | null,
-): Record<string, unknown> | null {
-  if (!usage) return null
-  return {
-    totalTokens: usage.totalTokens,
-    maxTokens: usage.maxTokens,
-    rawMaxTokens: usage.rawMaxTokens,
-    percentage: usage.percentage,
-    model: usage.model,
-    isAutoCompactEnabled: usage.isAutoCompactEnabled,
-    autoCompactThreshold: usage.autoCompactThreshold,
-    categories: usage.categories?.map(category => ({
-      name: category.name,
-      tokens: category.tokens,
-      color: category.color,
-      isDeferred: category.isDeferred,
-    })) ?? [],
-    memoryFiles: usage.memoryFiles?.map(file => ({
-      path: file.path,
-      type: file.type,
-      tokens: file.tokens,
-    })) ?? [],
-    mcpTools: usage.mcpTools?.map(tool => ({
-      name: tool.name,
-      serverName: tool.serverName,
-      tokens: tool.tokens,
-      isLoaded: tool.isLoaded,
-    })) ?? [],
-    deferredBuiltinTools: usage.deferredBuiltinTools?.map(tool => ({
-      name: tool.name,
-      tokens: tool.tokens,
-      isLoaded: tool.isLoaded,
-    })) ?? [],
-    systemTools: usage.systemTools?.map(tool => ({
-      name: tool.name,
-      tokens: tool.tokens,
-    })) ?? [],
-    systemPromptSections: usage.systemPromptSections?.map(section => ({
-      name: section.name,
-      tokens: section.tokens,
-    })) ?? [],
-    agents: usage.agents?.map(agent => ({
-      agentType: agent.agentType,
-      source: agent.source,
-      tokens: agent.tokens,
-    })) ?? [],
-    slashCommands: usage.slashCommands,
-    skills: usage.skills
-      ? {
-          totalSkills: usage.skills.totalSkills,
-          includedSkills: usage.skills.includedSkills,
-          tokens: usage.skills.tokens,
-          skillFrontmatter: usage.skills.skillFrontmatter?.map(skill => ({
-            name: skill.name,
-            source: skill.source,
-            tokens: skill.tokens,
-          })) ?? [],
-        }
-      : undefined,
-    messageBreakdown: usage.messageBreakdown,
-    apiUsage: usage.apiUsage,
-  }
-}
-
-async function readSdkContextUsage(params: {
-  q: Query
-  traceId: string
-  sessionId: string
-  phase: string
-}): Promise<Record<string, unknown> | null> {
-  try {
-    const usage = await params.q.getContextUsage()
-    const sanitized = sanitizeSdkContextUsage(usage)
-    logger.info('runtime.chat.sdk_context_usage', {
-      traceId: params.traceId,
-      sessionId: params.sessionId,
-      phase: params.phase,
-      totalTokens: usage.totalTokens,
-      maxTokens: usage.maxTokens,
-      percentage: usage.percentage,
-      isAutoCompactEnabled: usage.isAutoCompactEnabled,
-      autoCompactThreshold: usage.autoCompactThreshold,
-      categoryCount: usage.categories?.length ?? 0,
-      memoryFileCount: usage.memoryFiles?.length ?? 0,
-      mcpToolCount: usage.mcpTools?.length ?? 0,
-      skillCount: usage.skills?.includedSkills,
-    })
-    return sanitized
-  } catch (err) {
-    logger.warn('runtime.chat.sdk_context_usage_failed', {
-      traceId: params.traceId,
-      sessionId: params.sessionId,
-      phase: params.phase,
-      error: err instanceof Error ? err.message : String(err),
-    })
-    return null
-  }
-}
-
-function createSdkContextUsageSampler(params: {
-  traceId: string
-  sessionId: string
-  phase: string
-  intervalMs?: number
-}) {
-  let latest: Record<string, unknown> | null = null
-  let lastStartedAt = 0
-  let inFlight: Promise<void> | null = null
-
-  const sample = (q: Query | null, force = false) => {
-    if (!q) return latest
-    const now = Date.now()
-    const intervalMs = params.intervalMs ?? 2500
-    if (!force && (inFlight || now - lastStartedAt < intervalMs)) return latest
-    lastStartedAt = now
-    inFlight = readSdkContextUsage({
-      q,
-      traceId: params.traceId,
-      sessionId: params.sessionId,
-      phase: params.phase,
-    })
-      .then(usage => {
-        if (usage) latest = usage
-      })
-      .finally(() => {
-        inFlight = null
-      })
-    return latest
-  }
-
-  return {
-    sample,
-    flush: async () => {
-      if (inFlight) await inFlight
-      return latest
-    },
-    latest: () => latest,
   }
 }
 
@@ -245,6 +105,7 @@ export async function POST(req: Request) {
     permissionMode?: string
     thinkingMode?: string
     planMode?: boolean
+    agentName?: string
     enabledSkills?: string[]
     attachments?: Array<{ name: string; filename: string; originalFilename?: string; mimeType: string; tier: string }>
   }
@@ -311,6 +172,7 @@ export async function POST(req: Request) {
   const permissionMode = body.permissionMode || 'confirm'
   const thinkingMode = body.thinkingMode || 'auto'
   const planMode = body.planMode === true
+  const agentName = typeof body.agentName === 'string' ? body.agentName.trim() || undefined : undefined
   const enabledSkills = Array.isArray(body.enabledSkills)
     ? [...new Set(body.enabledSkills
         .filter((skill): skill is string => typeof skill === 'string')
@@ -365,6 +227,7 @@ export async function POST(req: Request) {
   let effectiveMessage: string
   let userMsgId: string
   let userMsgInserted = false
+  let runtimeUserBlocksForEvent: Array<Record<string, unknown>> = []
 
   if (body.resumePending) {
     // Resume pending: use the existing last user message in DB, don't insert a new one
@@ -385,9 +248,11 @@ export async function POST(req: Request) {
     userMsgId = lastUserMsg.id
     try {
       const blocks = JSON.parse(lastUserMsg.content) as Array<{ type: string; text?: string }>
+      runtimeUserBlocksForEvent = Array.isArray(blocks) ? blocks as Array<Record<string, unknown>> : []
       effectiveMessage = blocks.filter(b => b.type === 'text' && b.text).map(b => b.text).join(' ')
     } catch {
       effectiveMessage = lastUserMsg.content
+      runtimeUserBlocksForEvent = [{ type: 'text', text: lastUserMsg.content }]
     }
     sdkSkillCommand = isSdkSkillCommand(effectiveMessage, enabledSkills)
   } else {
@@ -425,16 +290,34 @@ export async function POST(req: Request) {
       'INSERT INTO messages (id, session_id, context_version, role, content) VALUES (?, ?, ?, ?, ?)'
     ).run(userMsgId, sessionId, currentContextVersion, 'user', JSON.stringify(userMsgBlocks))
     userMsgInserted = true
+    runtimeUserBlocksForEvent = userMsgBlocks
   }
+
+  publishSessionEvent(sessionId, {
+    type: 'runtime_user_message',
+    runtimeSource: 'runtime_chat',
+    messageId: userMsgId,
+    blocks: runtimeUserBlocksForEvent,
+    createdAt: new Date().toISOString(),
+  })
 
   cleanupStaleSessionAllowances()
 
   const encoder = new TextEncoder()
   const abortController = new AbortController()
+  const unregisterActiveRun = registerActiveRun(sessionId, abortController)
+  publishProjectEvent(session.project_id, {
+    type: 'session_run_started',
+    source: 'runtime_chat',
+    projectId: session.project_id,
+    sessionId,
+    startedAt: new Date().toISOString(),
+  })
   const { readable, writable } = new TransformStream()
   const writer = writable.getWriter()
 
   const emit = async (data: Record<string, unknown>) => {
+    publishSessionEvent(sessionId, { ...data, runtimeSource: 'runtime_chat' })
     try {
       await writer.write(encoder.encode(`data: ${JSON.stringify(data)}\n\n`))
     } catch { /* writer closed (client disconnected) */ }
@@ -454,9 +337,10 @@ export async function POST(req: Request) {
           confirmationStore.resolvePermission(requestId, decision)
         },
       }
+      const permissionBridge = createPermissionBridge(sessionId, emit as (event: SseEvent) => void, permissionPersistence)
       const canUseTool =
-        permissionMode === 'confirm'
-          ? createPermissionBridge(sessionId, emit as (event: SseEvent) => void, permissionPersistence)
+        permissionMode === 'confirm' || permissionMode === 'full'
+          ? permissionBridge
           : permissionMode === 'accept_edits'
             ? createAcceptEditsCanUseTool(sessionId, emit as (event: SseEvent) => void, permissionPersistence)
             : undefined
@@ -605,14 +489,56 @@ export async function POST(req: Request) {
 
       let sessionInUseDetected = false
       let activeRuntimeSessionId = runtimeSessionId
-      let activeQuery: Query | null = null
-      let sdkContextUsage: Record<string, unknown> | null = null
-      let sdkContextUsageSampler = createSdkContextUsageSampler({
-        traceId,
-        sessionId,
-        phase: 'stream_turn',
-      })
       const sdkCompactEvents: Record<string, unknown>[] = []
+      const sdkEventCounts: Record<string, number> = {}
+      const sdkParentEventCounts: Record<string, number> = {}
+      const recordSdkRuntimeMessage = (msg: Record<string, unknown>) => {
+        const subtype = typeof msg.subtype === 'string' ? `:${msg.subtype}` : ''
+        const key = `${String(msg.type || 'unknown')}${subtype}`
+        sdkEventCounts[key] = (sdkEventCounts[key] || 0) + 1
+        if ('parent_tool_use_id' in msg && msg.parent_tool_use_id) {
+          sdkParentEventCounts[key] = (sdkParentEventCounts[key] || 0) + 1
+        }
+        if (msg.type === 'system' && msg.subtype === 'init') {
+          const agents = Array.isArray(msg.agents) ? msg.agents.filter((agent): agent is string => typeof agent === 'string') : []
+          const tools = Array.isArray(msg.tools) ? msg.tools.filter((tool): tool is string => typeof tool === 'string') : []
+          const skills = Array.isArray(msg.skills) ? msg.skills.filter((skill): skill is string => typeof skill === 'string') : []
+          const mcpServers = Array.isArray(msg.mcp_servers) ? msg.mcp_servers : []
+          logger.info('runtime.chat.sdk_init', {
+            traceId,
+            sessionId,
+            runtimeSessionId: activeRuntimeSessionId,
+            cwd: typeof msg.cwd === 'string' ? msg.cwd : undefined,
+            model: typeof msg.model === 'string' ? msg.model : undefined,
+            agentCount: agents.length,
+            agents,
+            toolCount: tools.length,
+            tools,
+            skillCount: skills.length,
+            skills,
+            mcpServerCount: mcpServers.length,
+            mcpServers,
+          })
+        }
+        if (
+          msg.type === 'tool_use_summary' ||
+          msg.type === 'tool_progress' ||
+          (msg.type === 'system' && (msg.subtype === 'task_progress' || msg.subtype === 'task_notification' || msg.subtype === 'compact_boundary'))
+        ) {
+          logger.info('runtime.chat.sdk_runtime_event', {
+            traceId,
+            sessionId,
+            runtimeSessionId: activeRuntimeSessionId,
+            type: msg.type,
+            subtype: msg.subtype,
+            parentToolUseId: typeof msg.parent_tool_use_id === 'string' ? msg.parent_tool_use_id : undefined,
+            taskId: typeof msg.task_id === 'string' ? msg.task_id : undefined,
+            hasSummary: typeof msg.summary === 'string' && msg.summary.length > 0,
+            summaryChars: typeof msg.summary === 'string' ? msg.summary.length : undefined,
+            precedingToolUseCount: Array.isArray(msg.preceding_tool_use_ids) ? msg.preceding_tool_use_ids.length : undefined,
+          })
+        }
+      }
       const captureRuntimeEvent = (event: Record<string, unknown>) => {
         if (event.type !== 'compact_boundary') return
         sdkCompactEvents.push({
@@ -631,13 +557,7 @@ export async function POST(req: Request) {
         })
       }
       const captureRuntimeMessage = async (msg: Record<string, unknown>) => {
-        if (!activeQuery) return
-        if (msg.type === 'result') {
-          sdkContextUsage = await sdkContextUsageSampler.flush() ?? sdkContextUsage
-          return
-        }
-        sdkContextUsageSampler.sample(activeQuery)
-        sdkContextUsage = sdkContextUsageSampler.latest() ?? sdkContextUsage
+        recordSdkRuntimeMessage(msg)
       }
       const q = createLoomQuery({
         prompt: promptForQuery,
@@ -650,6 +570,7 @@ export async function POST(req: Request) {
         resumeSession: isResume,
         thinkingMode,
         attachments: attachments.length > 0 ? attachments : undefined,
+        agentName,
         enabledSkills,
         additionalDirectories: attachedFolderPaths,
         planMode,
@@ -658,8 +579,6 @@ export async function POST(req: Request) {
         providerIdOverride: projectProviderId,
         onSessionInUse: () => { sessionInUseDetected = true },
       })
-      activeQuery = q
-
       let needsFallback = false
       try {
         await drainQuery(q, mapper, emit, captureRuntimeEvent, captureRuntimeMessage)
@@ -752,11 +671,13 @@ export async function POST(req: Request) {
           contextBudget: contextBudgetSnapshot,
         })
         mapper = new MessageMapper()
-        sdkContextUsage = null
-        sdkContextUsageSampler = createSdkContextUsageSampler({
+        logger.info('runtime.chat.sdk_fallback_query_start', {
           traceId,
           sessionId,
-          phase: 'stream_fallback_turn',
+          previousRuntimeSessionId: activeRuntimeSessionId,
+          fallbackHistoryChars: fallbackHistory.historyChars,
+          fallbackHistoryMessageCount: fallbackHistory.selectedMessageCount,
+          sdkEventCountsBeforeFallback: sdkEventCounts,
         })
         const retryRuntimeSessionId = crypto.randomUUID()
         activeRuntimeSessionId = retryRuntimeSessionId
@@ -770,6 +691,8 @@ export async function POST(req: Request) {
           bypassPermissions: permissionMode === 'full' || permissionMode === 'plan',
           resumeSession: false,
           thinkingMode,
+          attachments: attachments.length > 0 ? attachments : undefined,
+          agentName,
           enabledSkills,
           additionalDirectories: attachedFolderPaths,
           planMode,
@@ -777,7 +700,6 @@ export async function POST(req: Request) {
           projectWorkspacePath: primaryWorkspacePath,
           providerIdOverride: projectProviderId,
         })
-        activeQuery = retryQ
         await drainQuery(retryQ, mapper, emit, captureRuntimeEvent, captureRuntimeMessage)
       }
       if (runtimeProviderChanged || !session.runtime_provider_id || !session.runtime_model_id || activeRuntimeSessionId !== session.runtime_session_id) {
@@ -785,11 +707,8 @@ export async function POST(req: Request) {
           `UPDATE sessions SET runtime_session_id = ?, runtime_provider_id = ?, runtime_model_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?`
         ).run(activeRuntimeSessionId, turnProviderId, turnModelId, sessionId)
       }
-
-      sdkContextUsage = await sdkContextUsageSampler.flush() ?? sdkContextUsage
-
       const blocks = mapper.getBlocks()
-      const elapsedSeconds = Math.floor((Date.now() - requestStart) / 1000)
+      const elapsedSeconds = Math.max(1, Math.ceil((Date.now() - requestStart) / 1000))
 
       // Truncate large tool results before storage. SDK context remains SDK-managed;
       // this policy only controls Loom DB/UI storage and follow-up fallback prompts.
@@ -820,7 +739,7 @@ export async function POST(req: Request) {
         elapsedSeconds,
         inputTokens: mapper.inputTokens,
         outputTokens: mapper.outputTokens,
-        sdkContextUsage,
+        sdkContextUsage: null,
       })
 
       const msgCount = db.prepare(
@@ -857,7 +776,6 @@ export async function POST(req: Request) {
               outputTokens: mapper.outputTokens,
               totalTokens: mapper.inputTokens + mapper.outputTokens,
             },
-            sdkContextUsage,
           },
           sdkCompactEvents,
         }
@@ -901,7 +819,6 @@ export async function POST(req: Request) {
           eventCount: sdkCompactEvents.length,
           trigger: latestSdkCompact.trigger,
           preTokens: latestSdkCompact.preTokens,
-          sdkContextUsage,
         })
       }
 
@@ -933,9 +850,9 @@ export async function POST(req: Request) {
         type: 'done',
         messageId: assistantMsgId,
         ...(userMsgInserted ? { userMessageId: userMsgId } : {}),
+        elapsedSeconds,
         inputTokens: mapper.inputTokens,
         outputTokens: mapper.outputTokens,
-        sdkContextUsage,
         sdkCompactBoundary,
         memory: memoryDebug,
         memoryCandidates: memoryCandidates.length,
@@ -949,7 +866,6 @@ export async function POST(req: Request) {
         totalTokens: mapper.inputTokens + mapper.outputTokens,
         elapsedSeconds,
         memoryCandidates: memoryCandidates.length,
-        sdkContextUsage,
         sdkCompactBoundary,
         contextBudget: contextBudgetSnapshot ? {
           ...contextBudgetSnapshot,
@@ -959,10 +875,17 @@ export async function POST(req: Request) {
             totalTokens: mapper.inputTokens + mapper.outputTokens,
           },
         } : null,
+        sdkEventCounts,
+        sdkParentEventCounts,
       })
     } catch (err) {
       const blocks = mapper.getBlocks()
-      const assistantMsgId = confirmationStore.savePartial(blocks)
+      const elapsedSeconds = Math.max(1, Math.ceil((Date.now() - requestStart) / 1000))
+      const assistantMsgId = confirmationStore.savePartial(blocks, {
+        elapsedSeconds,
+        inputTokens: mapper.inputTokens,
+        outputTokens: mapper.outputTokens,
+      })
       if (!assistantMsgId && userMsgInserted) {
         // Only delete user message if we inserted it (don't delete pre-existing ones)
         db.prepare('DELETE FROM messages WHERE id = ?').run(userMsgId)
@@ -974,15 +897,19 @@ export async function POST(req: Request) {
         userMsgInserted,
         blockCount: blocks.length,
       })
-      await emit({ type: 'error', error: errorMessage })
+      await emit({ type: 'error', error: errorMessage, elapsedSeconds })
     } finally {
+      unregisterActiveRun()
+      publishProjectEvent(session.project_id, {
+        type: 'session_run_finished',
+        source: 'runtime_chat',
+        projectId: session.project_id,
+        sessionId,
+        finishedAt: new Date().toISOString(),
+      })
       try { await writer.close() } catch { /* already closed */ }
     }
   })()
-
-  req.signal.addEventListener('abort', () => {
-    abortController.abort()
-  })
 
   return new Response(readable, {
     headers: {

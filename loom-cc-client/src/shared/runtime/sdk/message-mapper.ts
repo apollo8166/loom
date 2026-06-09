@@ -454,9 +454,27 @@ export class MessageMapper {
 
   private mapResult(msg: Extract<SDKMessage, { type: 'result' }>): SseEvent[] {
     if ('usage' in msg && msg.usage) {
-      const usage = msg.usage as { input_tokens?: number; output_tokens?: number }
-      this.inputTokens = usage.input_tokens || 0
+      const usage = msg.usage as {
+        input_tokens?: number
+        output_tokens?: number
+        cache_creation_input_tokens?: number
+        cache_read_input_tokens?: number
+      }
+      this.inputTokens = (usage.input_tokens || 0) + (usage.cache_creation_input_tokens || 0) + (usage.cache_read_input_tokens || 0)
       this.outputTokens = usage.output_tokens || 0
+    }
+    if ((!this.inputTokens && !this.outputTokens) && 'modelUsage' in msg && msg.modelUsage) {
+      const modelUsage = msg.modelUsage as Record<string, {
+        inputTokens?: number
+        outputTokens?: number
+        cacheCreationInputTokens?: number
+        cacheReadInputTokens?: number
+      }>
+      this.inputTokens = Object.values(modelUsage).reduce(
+        (sum, usage) => sum + (usage.inputTokens || 0) + (usage.cacheCreationInputTokens || 0) + (usage.cacheReadInputTokens || 0),
+        0,
+      )
+      this.outputTokens = Object.values(modelUsage).reduce((sum, usage) => sum + (usage.outputTokens || 0), 0)
     }
     if (msg.subtype === 'success') return []
     const errorMsg = msg.subtype.startsWith('error') && 'errors' in msg && Array.isArray(msg.errors)

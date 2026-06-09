@@ -4,11 +4,14 @@ import { getDb } from '@/shared/db/db'
 import { startCronEngine } from '@/shared/runtime/cron/engine'
 import type { ScheduledTask } from '@/shared/types'
 import { logger } from '@/shared/logging/logger'
+import { parseTaskSkillNames, serializeTaskSkillNames } from '@/shared/runtime/cron/task-skills'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 function mapTask(row: Record<string, unknown>): ScheduledTask {
+  const skillName = (row.skill_name as string) ?? ''
+  const skillNames = parseTaskSkillNames(skillName)
   return {
     id: row.id as string,
     projectId: row.project_id as string,
@@ -16,7 +19,9 @@ function mapTask(row: Record<string, unknown>): ScheduledTask {
     description: (row.description as string) ?? '',
     schedule: row.schedule as string,
     prompt: row.prompt as string,
-    skillName: (row.skill_name as string) ?? '',
+    agentName: (row.agent_name as string) ?? '',
+    skillName,
+    skillNames,
     model: row.model as string,
     enabled: (row.enabled as number) === 1,
     lastRunAt: (row.last_run_at as string) ?? null,
@@ -63,7 +68,9 @@ export async function POST(
     description?: string
     schedule: string
     prompt: string
+    agentName?: string
     skillName?: string
+    skillNames?: string[]
     model?: string
     enabled?: boolean
   }
@@ -77,14 +84,15 @@ export async function POST(
   const taskId = crypto.randomUUID()
   try {
     db.prepare(
-      `INSERT INTO scheduled_tasks (id, project_id, name, description, schedule, prompt, skill_name, model, enabled)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO scheduled_tasks (id, project_id, name, description, schedule, prompt, agent_name, skill_name, model, enabled)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       taskId, id, body.name.trim(),
       body.description?.trim() ?? '',
       body.schedule.trim(),
       body.prompt?.trim() ?? '',
-      body.skillName?.trim() ?? '',
+      body.agentName?.trim() ?? '',
+      serializeTaskSkillNames(body.skillNames ?? body.skillName),
       body.model?.trim() ?? '',
       body.enabled !== false ? 1 : 0,
     )

@@ -4,6 +4,7 @@ import { extractMemoryCandidatesWithLlm } from './auto-extractor'
 import { messageContentToText } from './session-messages'
 import { logger } from '@/shared/logging/logger'
 import { runCheapEvolutionPass, runEvolution } from '@/shared/evolution/orchestrator'
+import { isUnavailableModelError } from '@/shared/runtime/background-model'
 
 type MemoryExtractionReason = 'after_message' | 'compact_flush' | 'manual'
 
@@ -166,6 +167,28 @@ export async function runMemoryExtractionJob(payload: MemoryJobPayload): Promise
     }
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err)
+    if (isUnavailableModelError(err)) {
+      db.prepare(
+        `UPDATE memory_jobs
+         SET status = 'skipped',
+             error = ?,
+             completed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+         WHERE id = ?`
+      ).run(error.slice(0, 1000), prepared.jobId)
+      logger.warn('memory.job.skipped_model_unavailable', {
+        jobId: prepared.jobId,
+        sessionId: payload.sessionId,
+        reason: payload.reason,
+        error,
+      })
+      return {
+        status: 'skipped',
+        candidateCount: 0,
+        jobId: prepared.jobId,
+        messageHash: prepared.messageHash,
+        error,
+      }
+    }
     db.prepare(
       `UPDATE memory_jobs
        SET status = 'failed',

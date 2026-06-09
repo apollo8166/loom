@@ -2,6 +2,12 @@
 
 import { useState, useEffect } from 'react'
 import { Brain, FolderOpen, Loader2, AlertTriangle, RefreshCw } from 'lucide-react'
+import {
+  CONTEXT_WINDOW_FALLBACK_SETTING_KEY,
+  DEFAULT_CONTEXT_WINDOW_TOKENS,
+  formatContextWindowTokens,
+  normalizeContextWindowTokens,
+} from '@/shared/config/context-window'
 
 export function AdvancedSettings() {
   const [cliPath, setCliPath] = useState('')
@@ -24,6 +30,7 @@ export function AdvancedSettings() {
   const [memoryDebugVisible, setMemoryDebugVisible] = useState(false)
   const [sdkAutoCompactEnabled, setSdkAutoCompactEnabled] = useState(true)
   const [sdkAutoCompactWindow, setSdkAutoCompactWindow] = useState('')
+  const [defaultContextWindow, setDefaultContextWindow] = useState('')
   const [logPaths, setLogPaths] = useState<{ dir: string; main: string; error: string } | null>(null)
 
   const dataPath = (typeof window !== 'undefined' && window.electronAPI?.loomDataPath) || '~/.loom-cc'
@@ -43,14 +50,17 @@ export function AdvancedSettings() {
       fetch('/api/config/settings?key=memory_debug_visible').then(r => r.json()).catch(() => ({ value: null })),
       fetch('/api/config/settings?key=sdk_auto_compact_enabled').then(r => r.json()).catch(() => ({ value: null })),
       fetch('/api/config/settings?key=sdk_auto_compact_window').then(r => r.json()).catch(() => ({ value: null })),
-    ]).then(([debugData, compactData, windowData]) => {
+      fetch(`/api/config/settings?key=${CONTEXT_WINDOW_FALLBACK_SETTING_KEY}`).then(r => r.json()).catch(() => ({ value: null })),
+    ]).then(([debugData, compactData, windowData, fallbackData]) => {
       setMemoryDebugVisible(debugData.value === 'true')
       setSdkAutoCompactEnabled(compactData.value == null ? true : compactData.value === 'true')
       setSdkAutoCompactWindow(windowData.value || '')
+      setDefaultContextWindow(fallbackData.value || '')
     }).catch(() => {
       setMemoryDebugVisible(false)
       setSdkAutoCompactEnabled(true)
       setSdkAutoCompactWindow('')
+      setDefaultContextWindow('')
     })
   }, [])
 
@@ -220,6 +230,26 @@ export function AdvancedSettings() {
       setTimeout(() => setSaveMsg(null), 2000)
     } catch (err) {
       setError(err instanceof Error ? err.message : '保存 SDK 自动压缩窗口失败')
+    }
+  }
+
+  const saveDefaultContextWindow = async () => {
+    setError(null)
+    const trimmed = defaultContextWindow.trim()
+    if (trimmed && !normalizeContextWindowTokens(trimmed)) {
+      setError('默认上下文窗口必须是正整数，或留空使用 Loom 默认值')
+      return
+    }
+    try {
+      await fetch('/api/config/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: CONTEXT_WINDOW_FALLBACK_SETTING_KEY, value: trimmed }),
+      })
+      setSaveMsg('已保存')
+      setTimeout(() => setSaveMsg(null), 2000)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '保存默认上下文窗口失败')
     }
   }
 
@@ -395,6 +425,49 @@ export function AdvancedSettings() {
         )}
         <p style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>
           自定义 claude 二进制文件路径，留空则自动从 PATH 中查找
+        </p>
+      </div>
+
+      {/* Token Progress Context */}
+      <div style={{
+        display: 'flex', flexDirection: 'column', gap: 12,
+        padding: 16, borderRadius: 12,
+        background: 'var(--color-bg-surface)',
+        border: '1px solid var(--color-border-subtle)',
+      }}>
+        <label style={{ fontSize: 11, letterSpacing: '0.04em', color: 'var(--color-text-muted)' }}>
+          Token 进度条默认窗口
+        </label>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <input
+            type="number"
+            min={1}
+            value={defaultContextWindow}
+            onChange={e => setDefaultContextWindow(e.target.value)}
+            placeholder={`留空使用 ${formatContextWindowTokens(DEFAULT_CONTEXT_WINDOW_TOKENS)} tokens`}
+            style={{
+              ...inputStyle,
+              fontSize: 13, borderRadius: 7, padding: '7px 12px', outline: 'none',
+              width: '100%', boxSizing: 'border-box' as const,
+            }}
+          />
+          <button
+            onClick={saveDefaultContextWindow}
+            style={{
+              flexShrink: 0,
+              display: 'flex', alignItems: 'center', gap: 6,
+              padding: '7px 14px', borderRadius: 8, fontSize: 12, fontWeight: 600,
+              cursor: 'pointer',
+              background: 'var(--color-accent-primary)',
+              border: 'none',
+              color: '#fff',
+            }}
+          >
+            保存
+          </button>
+        </div>
+        <p style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>
+          仅用于输入框下方的本地累计 token 进度条；优先使用 Provider 层级配置和模型内置窗口。
         </p>
       </div>
 

@@ -7,7 +7,6 @@ import {
   getLegacyLoomGlobalSkillsDir,
   getSdkGlobalClaudeDir,
 } from '@/shared/skills/sdk-global-skills'
-import { getBuiltinSkills } from '@/shared/skills/builtin-skills'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -126,12 +125,10 @@ export async function GET(req: Request) {
 
   const seen = new Set<string>()
   const skills: SkillEntry[] = []
-  const catalogNames = new Set(getBuiltinSkills().map(skill => skill.slug))
 
   for (const [dir, src] of [[project, 'project'], [globalDir, 'global'], [legacyLoomGlobalDir, 'global']] as [string | null, 'project' | 'global'][]) {
     if (!dir) continue
     for (const s of readSkillsFrom(dir, src, readOptions)) {
-      if (!catalogNames.has(s.name)) continue
       if (!seen.has(s.name)) { seen.add(s.name); skills.push(s) }
     }
   }

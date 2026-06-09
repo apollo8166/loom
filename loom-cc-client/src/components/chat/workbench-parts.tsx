@@ -942,6 +942,7 @@ export function UserMessage({ blocks, fallbackContent, onPreviewFile }: {
         {/* ── Image attachments ── */}
         {imageBlocks.map((b, i) => {
           if (b.type !== 'image_attachment') return null
+          if (!b.url?.trim()) return null
           const canPreview = !!onPreviewFile
           return (
             <div
@@ -1045,8 +1046,26 @@ export function UserMessage({ blocks, fallbackContent, onPreviewFile }: {
 
 /* ── Assistant Message ── */
 
+function normalizePositiveSeconds(value: unknown): number {
+  const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : 0
+  if (!Number.isFinite(n) || n <= 0) return 0
+  return Math.max(1, Math.ceil(n))
+}
+
+function durationMsToSeconds(value: unknown): number {
+  const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : 0
+  if (!Number.isFinite(n) || n <= 0) return 0
+  return Math.max(1, Math.ceil(n / 1000))
+}
+
+function getTaskUsageDurationSeconds(usage: unknown): number {
+  if (!usage || typeof usage !== 'object' || Array.isArray(usage)) return 0
+  const raw = usage as Record<string, unknown>
+  return durationMsToSeconds(raw.duration_ms ?? raw.durationMs)
+}
+
 export function AssistantMessage({
-  blocks, streaming, isThinking, thinkingMode, onPermissionDecision, onAskUserQuestionResponse, elapsedSeconds, inputTokens, outputTokens,
+  blocks, streaming, isThinking, thinkingMode, onPermissionDecision, onAskUserQuestionResponse, onPreviewFile, elapsedSeconds, inputTokens, outputTokens,
 }: {
   blocks: ContentBlock[]
   streaming: boolean
@@ -1054,6 +1073,7 @@ export function AssistantMessage({
   thinkingMode?: string
   onPermissionDecision?: (requestId: string, decision: 'allow' | 'allow_session' | 'deny') => void
   onAskUserQuestionResponse?: (requestId: string, action: 'submit' | 'cancel', answers?: AskUserQuestionAnswers, annotations?: AskUserQuestionAnnotations) => void
+  onPreviewFile?: (file: PreviewFile) => void
   elapsedSeconds?: number
   inputTokens?: number
   outputTokens?: number
@@ -1075,11 +1095,30 @@ export function AssistantMessage({
     return <div className="flex flex-col gap-1"><WaitingIndicator label={label} /></div>
   }
 
-  const toolResults = new Map<string, { content: string; is_error: boolean }>()
+  const toolResults = new Map<string, { content: string; is_error: boolean; elapsedSeconds: number }>()
+  const toolProgressElapsed = new Map<string, number>()
+  const taskToolUseIds = new Map<string, string>()
+  const taskElapsedByToolUseId = new Map<string, number>()
   const toolFailures = new Set<string>()
   const bridgedAskQuestionToolIds = new Set<string>()
   for (const b of blocks) {
-    if (b.type === 'tool_result') toolResults.set(b.tool_use_id, { content: b.content, is_error: b.is_error })
+    if (b.type === 'tool_result') {
+      const resultElapsed = normalizePositiveSeconds((b as { elapsed_time_seconds?: unknown }).elapsed_time_seconds)
+      toolResults.set(b.tool_use_id, { content: b.content, is_error: b.is_error, elapsedSeconds: resultElapsed })
+    }
+    if (b.type === 'tool_progress') {
+      const progressElapsed = normalizePositiveSeconds(b.elapsed_time_seconds)
+      if (progressElapsed > 0) toolProgressElapsed.set(b.tool_use_id, progressElapsed)
+    }
+    if (b.type === 'task_event') {
+      const payloadToolUseId = typeof b.payload.tool_use_id === 'string' ? b.payload.tool_use_id : ''
+      if (payloadToolUseId) taskToolUseIds.set(b.task_id, payloadToolUseId)
+      const toolUseId = payloadToolUseId || taskToolUseIds.get(b.task_id)
+      const taskElapsed = getTaskUsageDurationSeconds(b.payload.usage)
+      if (toolUseId && taskElapsed > 0) {
+        taskElapsedByToolUseId.set(toolUseId, Math.max(taskElapsedByToolUseId.get(toolUseId) || 0, taskElapsed))
+      }
+    }
     if (b.type === 'permission_request' && b.toolFailed && b.toolUseId) toolFailures.add(b.toolUseId)
     if (b.type === 'ask_user_question' && b.toolUseId) bridgedAskQuestionToolIds.add(b.toolUseId)
   }
@@ -1107,7 +1146,7 @@ export function AssistantMessage({
           case 'text':
             return (
               <div key={`text-${i}`} className="text-[13px] leading-relaxed select-text">
-                <MarkdownRenderer content={block.text} />
+                <MarkdownRenderer content={block.text} onPreviewFile={onPreviewFile} />
                 {streaming && i === lastTextOrThinkingIdx && !hasAnyText && <StreamingCursor />}
               </div>
             )
@@ -1118,20 +1157,24 @@ export function AssistantMessage({
             if (isAgentToolCall(block.name)) {
               const agentTask = String(block.input.description || block.input.prompt || '')
               const result = toolResults.get(block.id)
+              const agentElapsedSeconds = result?.elapsedSeconds
+                || taskElapsedByToolUseId.get(block.id)
+                || toolProgressElapsed.get(block.id)
+                || 0
               return (
-                <AgentBlock key={block.id} toolUseId={block.id}
+                <AgentBlock key={`agent-${block.id}-${i}`} toolUseId={block.id}
                   agentName={String(block.input.description || block.name || 'agent').slice(0, 30)}
                   task={agentTask} hasResult={!!result} isResultError={!!result?.is_error}
-                  resultContent={result?.content} elapsedSeconds={0} streaming={streaming}
+                  resultContent={result?.content} elapsedSeconds={agentElapsedSeconds} streaming={streaming}
                   agentSubBlocks={agentSubBlocksMap.get(block.id)} />
               )
             }
             return (
-              <ToolUseBlock key={block.id} id={block.id} name={block.name} input={block.input}
+              <ToolUseBlock key={`tool-${block.id}-${i}`} id={block.id} name={block.name} input={block.input}
                 result={toolResults.get(block.id)} toolFailed={toolFailures.has(block.id)} streaming={streaming} />
             )
           }
-          case 'tool_raw_result': case 'tool_result': case 'agent_content': case 'tool_progress':
+          case 'tool_raw_result': case 'tool_result': case 'agent_content': case 'tool_progress': case 'task_event':
             return null
           case 'permission_request':
             return <PermissionBlock key={`perm-${block.requestId}`} requestId={block.requestId}
@@ -1205,7 +1248,7 @@ export const SUPPORTED_EXTENSIONS = new Set([
   '.mp4',
   '.pdf',
   '.txt', '.md', '.mdx', '.rst', '.log', '.csv', '.tsv', '.jsonl',
-  '.ts', '.tsx', '.js', '.jsx', '.py', '.rs', '.go', '.java',
+  '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.rs', '.go', '.java',
   '.cpp', '.c', '.h', '.hpp', '.rb', '.php', '.swift', '.kt',
   '.sh', '.bash', '.zsh', '.fish', '.sql',
   '.json', '.yaml', '.yml', '.toml', '.xml', '.env', '.ini', '.cfg',
@@ -1232,7 +1275,7 @@ export function getChipConfig(name: string, tier: string): ChipConfig {
   if (ext === 'json') return { letter: '{ }', color: '#8b5cf6', typeLabel: 'JSON' }
   if (['yaml', 'yml'].includes(ext)) return { letter: 'YML', color: '#8b5cf6', typeLabel: 'YAML' }
   if (['ts', 'tsx'].includes(ext)) return { letter: 'TS', color: '#3b82f6', typeLabel: ext === 'tsx' ? 'TSX' : 'TypeScript' }
-  if (['js', 'jsx'].includes(ext)) return { letter: 'JS', color: '#f59e0b', typeLabel: ext === 'jsx' ? 'JSX' : 'JavaScript' }
+  if (['js', 'jsx', 'mjs', 'cjs'].includes(ext)) return { letter: 'JS', color: '#f59e0b', typeLabel: ext === 'jsx' ? 'JSX' : 'JavaScript' }
   if (ext === 'py') return { letter: 'PY', color: '#3b82f6', typeLabel: 'Python' }
   return { letter: 'FILE', color: '#6b7280', typeLabel: 'File' }
 }

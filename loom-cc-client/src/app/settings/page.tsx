@@ -1,8 +1,9 @@
 'use client'
 
 import { useState } from 'react'
-import { ChevronRight, Cpu, Volume2, Globe, FileText, Monitor, Settings2, Sliders, Keyboard } from 'lucide-react'
+import { ChevronRight, Cpu, Volume2, Globe, FileText, Monitor, Settings2, Sliders, Keyboard, Image as ImageIcon } from 'lucide-react'
 import { ProviderSettings } from '@/components/settings/provider-settings'
+import { ImageGenerationSettings } from '@/components/settings/image-generation-settings'
 import { TtsSettings } from '@/components/settings/tts-settings'
 import { AsrSettings } from '@/components/settings/asr-settings'
 import { WebSearchSettings } from '@/components/settings/web-search-settings'
@@ -15,6 +16,7 @@ import { ShortcutSettings } from '@/components/settings/shortcut-settings'
 /* ── Panel IDs ── */
 type PanelId =
   | 'provider'
+  | 'image-generation'
   | 'tts'
   | 'asr'
   | 'web-search-config'
@@ -29,6 +31,10 @@ const NAV = [
   {
     id: 'ai', label: 'AI 服务商', Icon: Cpu,
     children: [{ id: 'provider' as PanelId, label: 'Provider 设置' }],
+  },
+  {
+    id: 'image-generation-root', label: '图像生成', Icon: ImageIcon,
+    children: [{ id: 'image-generation' as PanelId, label: '图像生成设置' }],
   },
   {
     id: 'voice', label: '语音配置', Icon: Volume2,
@@ -216,6 +222,11 @@ export default function SettingsPage() {
             <ProviderSettings />
           </PanelWrap>
         )}
+        {activePanel === 'image-generation' && (
+          <PanelWrap title="图像生成设置" desc="配置文生图和参考图生图服务商，支持 GPT-Image2 与 SeeDream">
+            <ImageGenerationSettings />
+          </PanelWrap>
+        )}
         {activePanel === 'tts' && (
           <PanelWrap title="语音合成" desc="配置 TTS 服务商及音色">
             <TtsSettings />
@@ -242,7 +253,7 @@ export default function SettingsPage() {
           </PanelWrap>
         )}
         {activePanel === 'mcp-config' && (
-          <PanelWrap title="MCP 服务配置" desc="管理 Model Context Protocol 服务器">
+          <PanelWrap title="Claude User MCP" desc="管理 Claude user scope 的 Model Context Protocol 服务器">
             <McpSettings />
           </PanelWrap>
         )}

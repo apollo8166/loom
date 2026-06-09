@@ -12,6 +12,7 @@ import { recordDeterministicObservation, runDeterministicPromotionBatch } from '
 import { decaySemanticMemories } from './semantic-memory-store'
 import { rebuildProjectDossierDeterministic } from './dossier-store'
 import { hasNegativePrior } from './negative-priors'
+import { applyProjectEvolutionResult } from './project-evolution-applier'
 import { createProjectRule, decayProjectRules, listProjectRules, recordRuleApplication, syncProjectRuleFiles, updateProjectRuleStatus } from './rule-store'
 import { runEvolutionSkill } from './skill-runner'
 import type {
@@ -44,6 +45,40 @@ type RetrospectiveItem = {
   evidence?: string
   confidence?: MemoryCandidate['confidence']
   rulePotential?: boolean
+}
+
+async function runProjectEvolutionOrganizer(params: {
+  projectId?: string
+  sessionId: string
+  workspacePath: string
+  trigger: EvolutionTrigger
+  messages: MessageSnippet[]
+}) {
+  const packet = buildEvolutionPacket({
+    projectId: params.projectId,
+    sessionId: params.sessionId,
+    workspacePath: params.workspacePath,
+    trigger: params.trigger,
+    messages: params.messages,
+  })
+  const result = await runEvolutionSkill({ skillName: 'project-evolution', packet })
+  const applied = applyProjectEvolutionResult({
+    projectId: params.projectId,
+    sessionId: params.sessionId,
+    workspacePath: params.workspacePath,
+    packet,
+    result,
+  })
+  recordEvolutionEvent({
+    projectId: params.projectId,
+    sessionId: params.sessionId,
+    workspacePath: params.workspacePath,
+    eventType: 'project_evolution_audit',
+    trigger: params.trigger,
+    summary: 'Project evolution organizer completed',
+    payload: { result, applied },
+  })
+  return applied
 }
 
 function asArray<T>(value: unknown): T[] {
@@ -670,22 +705,12 @@ export async function runEvolution(params: {
       summary: `promoted ${promotion.promoted}, reinforced ${promotion.reinforced}, stale ${semanticDecay.stale + ruleDecay.stale}`,
       payload: { promotion, semanticDecay, ruleDecay, dossierId: dossier.id },
     })
-    const packet = buildEvolutionPacket({
+    await runProjectEvolutionOrganizer({
       projectId: params.projectId,
       sessionId: params.sessionId,
       workspacePath: params.workspacePath,
       trigger: gate.trigger,
       messages: params.messages,
-    })
-    const result = await runEvolutionSkill({ skillName: 'project-evolution', packet })
-    recordEvolutionEvent({
-      projectId: params.projectId,
-      sessionId: params.sessionId,
-      workspacePath: params.workspacePath,
-      eventType: 'project_evolution_audit',
-      trigger: gate.trigger,
-      summary: 'Periodic project evolution audit completed',
-      payload: { result },
     })
     await auditShadowRules({
       projectId: params.projectId,
@@ -722,6 +747,13 @@ export async function runEvolution(params: {
       projectId: params.projectId,
       workspacePath: params.workspacePath,
       source: gate.trigger,
+    })
+    await runProjectEvolutionOrganizer({
+      projectId: params.projectId,
+      sessionId: params.sessionId,
+      workspacePath: params.workspacePath,
+      trigger: gate.trigger,
+      messages: params.messages,
     })
     if (promotion.promoted > 0 || promotion.reinforced > 0) {
       recordEvolutionEvent({

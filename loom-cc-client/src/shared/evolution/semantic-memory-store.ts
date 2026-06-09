@@ -272,3 +272,68 @@ export function decaySemanticMemories(params: {
   }
   return { stale, archived }
 }
+
+export function updateSemanticMemoryFromEvolution(params: {
+  id: string
+  title?: string
+  content?: string
+  category?: string
+  status?: SemanticMemoryStatus
+  evidenceIds?: string[]
+  sourceObservationIds?: string[]
+  strengthDelta?: number
+  confidenceDelta?: number
+  reason?: string
+}): SemanticMemory | null {
+  const memory = getSemanticMemory(params.id)
+  if (!memory) return null
+  const title = params.title?.trim() || memory.title
+  const content = params.content?.trim() || memory.content
+  const category = params.category?.trim() || memory.category
+  const status = params.status || memory.status
+  const evidenceIds = stringifyList([...memory.evidenceIds, ...(params.evidenceIds || [])])
+  const sourceObservationIds = stringifyList([...memory.sourceObservationIds, ...(params.sourceObservationIds || [])])
+  getDb().prepare(
+    `UPDATE semantic_memories
+     SET title = ?,
+         content = ?,
+         category = ?,
+         status = ?,
+         confidence = MIN(1, MAX(0, confidence + ?)),
+         strength = MIN(1, MAX(0, strength + ?)),
+         evidence_ids = ?,
+         source_observation_ids = ?,
+         stale_score = CASE WHEN ? = 'active' THEN 0 ELSE stale_score END,
+         last_reinforced_at = CASE WHEN ? = 'active' THEN strftime('%Y-%m-%dT%H:%M:%SZ', 'now') ELSE last_reinforced_at END,
+         expires_at = CASE WHEN ? = 'active' THEN ? ELSE expires_at END,
+         updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+     WHERE id = ?`
+  ).run(
+    title,
+    content,
+    category,
+    status,
+    params.confidenceDelta ?? 0,
+    params.strengthDelta ?? 0,
+    evidenceIds,
+    sourceObservationIds,
+    status,
+    status,
+    status,
+    addDays(30),
+    params.id,
+  )
+  const updated = getSemanticMemory(params.id)
+  if (updated) {
+    recordEvolutionEvent({
+      projectId: updated.projectId,
+      workspacePath: updated.workspacePath,
+      eventType: status === 'archived' ? 'semantic_memory_archived_by_evolution' : 'semantic_memory_rewritten_by_evolution',
+      entityType: 'semantic_memory',
+      entityId: updated.id,
+      summary: params.reason || updated.title || preview(updated.content),
+      payload: { before: memory, after: updated },
+    })
+  }
+  return updated
+}

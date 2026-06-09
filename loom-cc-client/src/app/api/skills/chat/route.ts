@@ -76,9 +76,7 @@ export async function POST(req: NextRequest) {
     const provider = resolveProvider('claude-haiku-4-5')
     apiKey = provider.apiKey
     baseUrl = provider.baseUrl
-    modelId =
-      provider.resolvedModelId ||
-      (provider.providerId === 'anthropic' ? 'claude-haiku-4-5-20251001' : 'claude-haiku-4-5')
+    modelId = provider.resolvedModelId || 'claude-haiku-4-5'
     if (!apiKey && !provider.isCliAuth) {
       return new Response('{"error":"未配置 API Key，请在设置中配置 Anthropic API Key"}', {
         status: 401,

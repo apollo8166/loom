@@ -479,9 +479,8 @@ function translateOpenAIStreamToAnthropic(
   let nextBlockIdx = 0
   let thinkingBlockIdx = -1
   let textBlockIdx = -1
-  let openToolOAIIdx = -1
-
-  interface ToolInfo { blockIdx: number; id: string; name: string }
+  interface ToolInfo { id: string; name: string; arguments: string; hasUpstreamId: boolean }
+  interface NormalizedToolInfo { oaiIndex: number; tool: ToolInfo; sourceIndexes: number[] }
   const toolBlocks = new Map<number, ToolInfo>()
 
   function sse(event: string, data: object): Uint8Array {
@@ -517,24 +516,223 @@ function translateOpenAIStreamToAnthropic(
     textBlockIdx = -1
   }
 
-  function openToolBlock(
-    ctrl: ReadableStreamDefaultController,
-    oaiIdx: number,
-    id: string,
-    name: string,
-  ) {
-    closeTextBlock(ctrl)
-    if (openToolOAIIdx >= 0 && openToolOAIIdx !== oaiIdx) {
-      const prev = toolBlocks.get(openToolOAIIdx)
-      if (prev) ctrl.enqueue(sse('content_block_stop', { type: 'content_block_stop', index: prev.blockIdx }))
+  // Some models concatenate multiple JSON objects in a single arguments string,
+  // e.g. {"pattern":"a"}{"pattern":"b"}. Split them into individual JSON strings.
+  function splitConcatenatedJson(str: string): string[] {
+    const results: string[] = []
+    let remaining = str.trim()
+    while (remaining.length > 0) {
+      if (remaining[0] !== '{') break
+      let depth = 0
+      let inString = false
+      let escaped = false
+      let i = 0
+      for (; i < remaining.length; i++) {
+        const ch = remaining[i]
+        if (escaped) { escaped = false; continue }
+        if (ch === '\\' && inString) { escaped = true; continue }
+        if (ch === '"') { inString = !inString; continue }
+        if (inString) continue
+        if (ch === '{') depth++
+        else if (ch === '}') {
+          depth--
+          if (depth === 0) { i++; break }
+        }
+      }
+      if (depth !== 0) break
+      results.push(remaining.slice(0, i))
+      remaining = remaining.slice(i).trim()
     }
-    openToolOAIIdx = oaiIdx
-    const blockIdx = nextBlockIdx++
-    toolBlocks.set(oaiIdx, { blockIdx, id, name })
-    ctrl.enqueue(sse('content_block_start', {
-      type: 'content_block_start', index: blockIdx,
-      content_block: { type: 'tool_use', id, name, input: {} },
-    }))
+    return results.length > 0 ? results : [str]
+  }
+
+  function getToolBlock(oaiIdx: number): ToolInfo {
+    let block = toolBlocks.get(oaiIdx)
+    if (!block) {
+      block = { id: `call_proxy_${Date.now()}_${oaiIdx}`, name: '', arguments: '', hasUpstreamId: false }
+      toolBlocks.set(oaiIdx, block)
+    }
+    return block
+  }
+
+  function isEmptyToolArguments(args: string): boolean {
+    const trimmed = args.trim()
+    if (!trimmed) return true
+    try {
+      const input = JSON.parse(trimmed) as unknown
+      return input != null &&
+        typeof input === 'object' &&
+        !Array.isArray(input) &&
+        Object.keys(input).length === 0
+    } catch {
+      return false
+    }
+  }
+
+  function normalizeBufferedToolBlocks(): NormalizedToolInfo[] {
+    const orderedBlocks = [...toolBlocks.entries()].sort(([a], [b]) => a - b)
+    const used = new Set<number>()
+    const normalized: NormalizedToolInfo[] = []
+    const metadataOnly = orderedBlocks.filter(([, tool]) =>
+      tool.name.trim().length > 0 && isEmptyToolArguments(tool.arguments))
+    const argumentsOnly = orderedBlocks.filter(([, tool]) =>
+      tool.name.trim().length === 0 && !isEmptyToolArguments(tool.arguments))
+
+    // Some OpenAI-compatible streams split tool metadata and arguments into
+    // separate tool_call indexes. Anthropic requires one complete tool_use.
+    // Pair as many as possible even when counts differ (e.g. 2 meta + 1 args).
+    const pairCount = Math.min(metadataOnly.length, argumentsOnly.length)
+    if (pairCount > 0) {
+      for (let i = 0; i < pairCount; i++) {
+        const [metaIndex, metaTool] = metadataOnly[i]
+        const [argsIndex, argsTool] = argumentsOnly[i]
+        used.add(metaIndex)
+        used.add(argsIndex)
+        normalized.push({
+          oaiIndex: Math.min(metaIndex, argsIndex),
+          sourceIndexes: [metaIndex, argsIndex],
+          tool: {
+            id: metaTool.hasUpstreamId ? metaTool.id : argsTool.id,
+            name: metaTool.name,
+            arguments: argsTool.arguments,
+            hasUpstreamId: metaTool.hasUpstreamId || argsTool.hasUpstreamId,
+          },
+        })
+        logger.warn('llm.proxy.merge_stream_tool_call_split_delta', {
+          model,
+          name: metaTool.name,
+          metadataIndex: metaIndex,
+          argumentsIndex: argsIndex,
+          argumentsChars: argsTool.arguments.length,
+        })
+      }
+    }
+
+    const knownNames = [...new Set(orderedBlocks
+      .map(([, tool]) => tool.name.trim())
+      .filter(Boolean))]
+
+    // Remaining unmatched metadata-only blocks (no args partner after pairing).
+    const unmatchedMeta = metadataOnly.slice(pairCount)
+    const unmatchedMetaNames = unmatchedMeta.map(([, t]) => t.name.trim()).filter(Boolean)
+
+    for (const [oaiIndex, tool] of orderedBlocks) {
+      if (used.has(oaiIndex)) continue
+      const toolName = tool.name.trim()
+      const args = tool.arguments.trim()
+      if (!toolName && args) {
+        // Try to infer name: prefer the single known name, or the next unmatched metadata name.
+        let inferredName = knownNames.length === 1 ? knownNames[0] : unmatchedMetaNames.shift() ?? ''
+        if (inferredName) {
+          const idCarrier = orderedBlocks.find(([, candidate]) =>
+            candidate.name.trim() === inferredName && candidate.hasUpstreamId)
+          const reusableIdCarrier = idCarrier && used.has(idCarrier[0]) ? idCarrier : undefined
+          normalized.push({
+            oaiIndex,
+            sourceIndexes: [oaiIndex],
+            tool: {
+              ...tool,
+              id: reusableIdCarrier?.[1].id ?? tool.id,
+              name: inferredName,
+              hasUpstreamId: tool.hasUpstreamId || Boolean(reusableIdCarrier),
+            },
+          })
+          logger.warn('llm.proxy.infer_stream_tool_call_name', {
+            model,
+            inferredName,
+            oaiIndex,
+            argumentsChars: tool.arguments.length,
+          })
+          continue
+        }
+      }
+      normalized.push({ oaiIndex, tool, sourceIndexes: [oaiIndex] })
+    }
+
+    return normalized.sort((a, b) => a.oaiIndex - b.oaiIndex)
+  }
+
+  function emitBufferedToolBlocks(ctrl: ReadableStreamDefaultController): number {
+    if (toolBlocks.size === 0) return 0
+    closeTextBlock(ctrl)
+    let emitted = 0
+    const orderedBlocks = normalizeBufferedToolBlocks()
+    const emittedToolIds = new Set<string>()
+    for (const { oaiIndex, tool, sourceIndexes } of orderedBlocks) {
+      const toolName = tool.name.trim()
+      if (!toolName) {
+        logger.warn('llm.proxy.skip_stream_tool_call_missing_name', {
+          model,
+          oaiIndex,
+          sourceIndexes,
+          toolCallId: tool.id,
+          argumentsChars: tool.arguments.length,
+        })
+        continue
+      }
+      if (toolName === 'Agent' && isEmptyToolArguments(tool.arguments)) {
+        logger.warn('llm.proxy.drop_stream_tool_call_missing_required_input', {
+          model,
+          oaiIndex,
+          sourceIndexes,
+          toolCallId: tool.id,
+          name: toolName,
+          inputKeys: [],
+        })
+        continue
+      }
+      let toolId = tool.id
+      if (emittedToolIds.has(toolId)) {
+        if (isEmptyToolArguments(tool.arguments)) {
+          logger.warn('llm.proxy.drop_stream_tool_call_duplicate_empty_input', {
+            model,
+            oaiIndex,
+            sourceIndexes,
+            toolCallId: tool.id,
+            name: toolName,
+          })
+          continue
+        }
+        toolId = `${tool.id}_${sourceIndexes.join('_')}`
+        logger.warn('llm.proxy.rename_stream_tool_call_duplicate_id', {
+          model,
+          oaiIndex,
+          sourceIndexes,
+          originalToolCallId: tool.id,
+          renamedToolCallId: toolId,
+          name: toolName,
+        })
+      }
+      const rawArgs = tool.arguments.trim() || '{}'
+      const jsonParts = splitConcatenatedJson(rawArgs)
+      if (jsonParts.length > 1) {
+        logger.warn('llm.proxy.split_stream_tool_call_concatenated_args', {
+          model,
+          oaiIndex,
+          name: toolName,
+          splitCount: jsonParts.length,
+        })
+      }
+      for (let partIdx = 0; partIdx < jsonParts.length; partIdx++) {
+        const partToolId = partIdx === 0 ? toolId : `${toolId}_p${partIdx}`
+        const blockIdx = nextBlockIdx++
+        ctrl.enqueue(sse('content_block_start', {
+          type: 'content_block_start',
+          index: blockIdx,
+          content_block: { type: 'tool_use', id: partToolId, name: toolName, input: {} },
+        }))
+        ctrl.enqueue(sse('content_block_delta', {
+          type: 'content_block_delta',
+          index: blockIdx,
+          delta: { type: 'input_json_delta', partial_json: jsonParts[partIdx] },
+        }))
+        ctrl.enqueue(sse('content_block_stop', { type: 'content_block_stop', index: blockIdx }))
+        emittedToolIds.add(partToolId)
+        emitted++
+      }
+    }
+    toolBlocks.clear()
+    return emitted
   }
 
   function closeAllBlocks(ctrl: ReadableStreamDefaultController) {
@@ -543,11 +741,8 @@ function translateOpenAIStreamToAnthropic(
       thinkingBlockIdx = -1
     }
     closeTextBlock(ctrl)
-    if (openToolOAIIdx >= 0) {
-      const blk = toolBlocks.get(openToolOAIIdx)
-      if (blk) ctrl.enqueue(sse('content_block_stop', { type: 'content_block_stop', index: blk.blockIdx }))
-      openToolOAIIdx = -1
-    }
+    const emittedTools = emitBufferedToolBlocks(ctrl)
+    if (emittedTools === 0 && stopReason === 'tool_use') stopReason = 'end_turn'
   }
 
   function emitFinish(ctrl: ReadableStreamDefaultController) {
@@ -634,18 +829,15 @@ function translateOpenAIStreamToAnthropic(
             if (Array.isArray(delta.tool_calls)) {
               for (const tc of delta.tool_calls as OAIDeltaToolCall[]) {
                 const oaiIdx = tc.index ?? 0
-                if (tc.id && !toolBlocks.has(oaiIdx)) {
-                  openToolBlock(ctrl, oaiIdx, tc.id, tc.function?.name ?? '')
+                const block = getToolBlock(oaiIdx)
+                if (tc.id) {
+                  block.id = tc.id
+                  block.hasUpstreamId = true
                 }
+                if (tc.function?.name) block.name = tc.function.name
                 const argsChunk = tc.function?.arguments
                 if (typeof argsChunk === 'string' && argsChunk.length > 0) {
-                  const blk = toolBlocks.get(oaiIdx)
-                  if (blk) {
-                    ctrl.enqueue(sse('content_block_delta', {
-                      type: 'content_block_delta', index: blk.blockIdx,
-                      delta: { type: 'input_json_delta', partial_json: argsChunk },
-                    }))
-                  }
+                  block.arguments += argsChunk
                 }
               }
             }
@@ -673,6 +865,7 @@ function translateOpenAIStreamToAnthropic(
           }
         }
 
+        if (toolBlocks.size > 0 && stopReason === 'end_turn') stopReason = 'tool_use'
         if (headerEmitted && !finishEmitted) emitFinish(ctrl)
       } catch (err) {
         logger.error('llm.proxy.stream_translation_error', err, { model })

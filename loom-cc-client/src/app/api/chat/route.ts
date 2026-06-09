@@ -208,9 +208,10 @@ export async function POST(req: Request) {
     let mapper = new MessageMapper()
 
     try {
+      const permissionBridge = createPermissionBridge(sessionId!, emit as (event: SseEvent) => void)
       const canUseTool =
-        permissionMode === 'confirm'
-          ? createPermissionBridge(sessionId!, emit as (event: SseEvent) => void)
+        permissionMode === 'confirm' || permissionMode === 'full'
+          ? permissionBridge
           : permissionMode === 'accept_edits'
             ? createAcceptEditsCanUseTool(sessionId!, emit as (event: SseEvent) => void)
             : undefined
@@ -283,6 +284,7 @@ export async function POST(req: Request) {
           bypassPermissions: permissionMode === 'full' || permissionMode === 'plan',
           resumeSession: false,
           thinkingMode,
+          attachments: attachments.length > 0 ? attachments : undefined,
           enabledSkills,
           additionalDirectories: attachedFolderPaths,
           planMode,

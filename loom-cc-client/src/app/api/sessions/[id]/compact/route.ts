@@ -7,12 +7,47 @@ import { generateCompactSummaryWithLlm } from '@/shared/memory/auto-extractor'
 import { runMemoryExtractionJobDetached } from '@/shared/memory/background-jobs'
 import { messageContentToText } from '@/shared/memory/session-messages'
 import { logger } from '@/shared/logging/logger'
+import { registerActiveRun } from '@/shared/runtime/active-runs'
+import { publishProjectEvent } from '@/shared/runtime/session-events'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 function logCompact(event: string, payload: Record<string, unknown> = {}) {
   logger.info(`compact.${event}`, payload)
+}
+
+function compactExcerpt(text: string, maxChars: number): string {
+  const normalized = text.replace(/\s+/g, ' ').trim()
+  if (normalized.length <= maxChars) return normalized
+  return `${normalized.slice(0, maxChars - 1)}...`
+}
+
+function buildLocalCompactSummary(messages: Array<{ role: 'user' | 'assistant'; text: string }>): string {
+  const usefulMessages = messages
+    .map(message => ({ ...message, text: message.text.trim() }))
+    .filter(message => message.text.length > 0)
+  if (usefulMessages.length === 0) return ''
+
+  const userCount = usefulMessages.filter(message => message.role === 'user').length
+  const assistantCount = usefulMessages.filter(message => message.role === 'assistant').length
+  const latestUser = [...usefulMessages].reverse().find(message => message.role === 'user')
+  const latestAssistant = [...usefulMessages].reverse().find(message => message.role === 'assistant')
+  const recentMessages = usefulMessages.slice(-8)
+
+  const lines = [
+    '- 本摘要由 Loom 本地生成，因为 SDK /compact 或摘要模型暂时没有返回可用摘要。',
+    `- 归档范围：${usefulMessages.length} 条消息，其中用户 ${userCount} 条，助手 ${assistantCount} 条。`,
+  ]
+  if (latestUser) lines.push(`- 最近用户目标/请求：${compactExcerpt(latestUser.text, 700)}`)
+  if (latestAssistant) lines.push(`- 最近助手回复要点：${compactExcerpt(latestAssistant.text, 700)}`)
+  lines.push('- 最近对话摘录：')
+  for (const message of recentMessages) {
+    lines.push(`  - ${message.role === 'user' ? 'User' : 'Assistant'}: ${compactExcerpt(message.text, 500)}`)
+  }
+  lines.push('- 后续继续时，优先参考最近用户目标、未完成事项和上述摘录；不要假设摘录之外的细节。')
+
+  return lines.join('\n')
 }
 
 async function runSdkCompact(params: {
@@ -22,6 +57,7 @@ async function runSdkCompact(params: {
   workspacePath: string | null
   providerId: string
   useWorktree: boolean
+  abortController?: AbortController
 }): Promise<{ ok: boolean; summary: string; metadata?: Record<string, unknown>; error?: string }> {
   if (!params.runtimeSessionId) return { ok: false, summary: '', error: 'missing_runtime_session' }
   const mapper = new MessageMapper()
@@ -35,6 +71,7 @@ async function runSdkCompact(params: {
     providerIdOverride: params.providerId || undefined,
     useWorktree: params.useWorktree,
     maxTurns: 1,
+    abortController: params.abortController,
   })
   const textParts: string[] = []
   let metadata: Record<string, unknown> | undefined
@@ -98,6 +135,7 @@ export async function POST(
   }
 
   let summary = body.summary?.trim() || null
+  let summarySource: 'user' | 'sdk' | 'llm' | 'local' | null = summary ? 'user' : null
   const newContextVersion = session.context_version + 1
   const boundaryId = crypto.randomUUID()
 
@@ -109,6 +147,21 @@ export async function POST(
     hasRuntimeSession: Boolean(session.runtime_session_id),
     summaryChars: summary?.length ?? 0,
   })
+
+  const compactAbortController = new AbortController()
+  const unregisterActiveRun = registerActiveRun(id, compactAbortController, {
+    key: 'compact',
+    replaceSessionRuns: false,
+  })
+  publishProjectEvent(session.project_id, {
+    type: 'session_run_started',
+    source: 'compact',
+    projectId: session.project_id,
+    sessionId: id,
+    startedAt: new Date().toISOString(),
+  })
+
+  try {
 
   const activeRows = db.prepare(
     `SELECT role, content FROM messages
@@ -167,6 +220,7 @@ export async function POST(
       workspacePath,
       providerId: projectProvider?.value || '',
       useWorktree: session.use_worktree === 1,
+      abortController: compactAbortController,
     })
     logCompact('sdk_compact_result', {
       sessionId: id,
@@ -177,7 +231,10 @@ export async function POST(
     })
     if (sdkCompact.metadata) sdkCompactMetadata = sdkCompact.metadata
     if (sdkCompact.ok) compactSource = 'sdk'
-    if (sdkCompact.summary.trim()) summary = sdkCompact.summary.trim()
+    if (sdkCompact.summary.trim()) {
+      summary = sdkCompact.summary.trim()
+      summarySource = 'sdk'
+    }
   }
 
   if (!summary) {
@@ -191,6 +248,7 @@ export async function POST(
         sessionId: id,
         messages: activeMessages.slice(-12),
       })
+      if (summary?.trim()) summarySource = 'llm'
       logCompact('summary_generate_fallback_done', {
         sessionId: id,
         summaryChars: summary?.length ?? 0,
@@ -201,6 +259,15 @@ export async function POST(
       })
       summary = null
     }
+  }
+  if (!summary?.trim()) {
+    summary = buildLocalCompactSummary(activeMessages)
+    if (summary.trim()) summarySource = 'local'
+    logCompact('summary_generate_local_fallback', {
+      sessionId: id,
+      summaryChars: summary.length,
+      messageCount: activeMessages.length,
+    })
   }
   if (!summary?.trim()) {
     logCompact('abort_empty_summary', { sessionId: id })
@@ -221,6 +288,7 @@ export async function POST(
       messageCount: activeMessages.length,
       messageChars: activeMessageChars,
       summaryChars: summary.length,
+      summarySource,
       tokenStats: activeTokenStats,
     },
   }
@@ -251,6 +319,7 @@ export async function POST(
     toRuntimeSessionId: targetRuntimeSessionId,
     newContextVersion,
     compactSource,
+    summarySource,
     sdkCompact: compactSource === 'sdk',
     tokenStatsBefore: activeTokenStats,
     messageCountBefore: activeMessages.length,
@@ -311,4 +380,14 @@ export async function POST(
     sdkCompactMetadata,
     compactMetadata,
   })
+  } finally {
+    unregisterActiveRun()
+    publishProjectEvent(session.project_id, {
+      type: 'session_run_finished',
+      source: 'compact',
+      projectId: session.project_id,
+      sessionId: id,
+      finishedAt: new Date().toISOString(),
+    })
+  }
 }
