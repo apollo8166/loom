@@ -14,7 +14,7 @@ Loom is both a local AI workbench that can be used directly and a tool for helpi
 
 [Download](#download-and-install) | [Quick Start](#quick-start) | [Why Loom](#why-loom) | [Core Features](#core-features) | [Memory](#memory-and-context-management) | [Skills](#skills) | [Development](#development)
 
-> Status: early open-source release. Loom already includes desktop chat, project workspaces, token statistics, Skills, memory, scheduled tasks, and MCP/Agents command entry points. Harness, Marketplace, and the plugin system are still under active development.
+> Status: early open-source release. Loom already includes desktop chat, project workspaces, token statistics, Skills, memory, scheduled tasks, MCP / Agents management, image generation, and Feishu / Lark channel foundations. Harness, Marketplace, and the plugin system are still under active development.
 
 <a id="screenshot-workbench-main"></a>
 
@@ -132,8 +132,8 @@ This direction can evolve toward a local Agent platform with an extensible ecosy
 
 1. Open [Releases](https://github.com/apollo8166/loom/releases/latest).
 2. Download the package for your device:
-   - `loom-cc-v0.1.0-mac-arm64.dmg`: Apple Silicon / M-series Macs.
-   - `loom-cc-v0.1.0-mac-x64.dmg`: Intel Macs.
+   - `loom-cc-v0.2.0-mac-arm64.dmg`: Apple Silicon / M-series Macs.
+   - `loom-cc-v0.2.0-mac-x64.dmg`: Intel Macs.
 3. Install and open Loom.
 4. Configure model providers in Settings.
 5. Start a global chat or choose a project working directory.
@@ -493,9 +493,11 @@ For everyday users, this is easier to understand than starting directly with ter
 
 ## Version
 
-Current open-source baseline: `v0.1.0`.
+Current open-source baseline: `v0.2.0`.
 
-Release notes: [docs/releases/v0.1.0.md](docs/releases/v0.1.0.md).
+Release notes: [docs/releases/v0.2.0.md](docs/releases/v0.2.0.md).
+
+v0.2.0 adds Chat image generation, configurable GPT-Image2 / Nano Banana 2 / SeeDream image providers, project resource management for Subagents / Skills / MCP, enhanced scheduled-task execution, Feishu / Lark channel foundations, MP4 / local file preview improvements, stronger model and context-window settings, and multiple Chat / project creation fixes.
 
 ---
 

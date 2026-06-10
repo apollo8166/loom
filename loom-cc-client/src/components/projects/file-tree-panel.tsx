@@ -469,6 +469,16 @@ export function FileTreePanel({ projectId, workspacePath, projectName, onPreview
     setContextMenu({ path: p, name, isDir, x: e.clientX, y: e.clientY })
   }, [])
 
+  const handleOpenDirectory = useCallback(async (relPath: string) => {
+    const normalizedRelPath = relPath === ROOT_PATH ? '' : relPath
+    setContextMenu(null)
+    await fetch(`/api/projects/${projectId}/files/open-directory`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ relPath: normalizedRelPath }),
+    }).catch(() => {})
+  }, [projectId])
+
   /* ── Create ── */
   const startCreate = useCallback((type: 'file' | 'dir') => {
     const targetDirPath = selectedIsDir ? selectedPath : ROOT_PATH
@@ -659,7 +669,7 @@ export function FileTreePanel({ projectId, workspacePath, projectName, onPreview
             {/* Root node */}
             <div
               onClick={() => { togglePath(ROOT_PATH); handleSelect(ROOT_PATH, true) }}
-              onContextMenu={e => { e.preventDefault() }} // root can't be renamed/deleted
+              onContextMenu={e => handleContextMenu(e, ROOT_PATH, projectName, true)}
               style={{
                 display: 'flex', alignItems: 'center', gap: 4,
                 padding: '3px 12px', cursor: 'pointer', borderRadius: 4, userSelect: 'none',
@@ -722,6 +732,19 @@ export function FileTreePanel({ projectId, workspacePath, projectName, onPreview
             borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.4)', padding: '4px 0',
           }}
         >
+          {contextMenu.isDir && (
+            <button
+              onMouseDown={e => { e.preventDefault(); void handleOpenDirectory(contextMenu.path) }}
+              style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '6px 16px', fontSize: 12, textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--color-text-secondary)' }}
+              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'var(--color-bg-surface-high)' }}
+              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'none' }}
+            >
+              <FolderOpen size={12} style={{ color: 'var(--color-text-muted)' }} />
+              打开目录
+            </button>
+          )}
+          {contextMenu.path !== ROOT_PATH && (
+            <>
           <button
             onMouseDown={e => { e.preventDefault(); const node = findNode(files, contextMenu.path); if (node) startRename(contextMenu.path, node.name) }}
             style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '6px 16px', fontSize: 12, textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--color-text-secondary)' }}
@@ -740,6 +763,8 @@ export function FileTreePanel({ projectId, workspacePath, projectName, onPreview
             <Trash2 size={12} />
             删除
           </button>
+            </>
+          )}
         </div>,
         document.body,
       )}

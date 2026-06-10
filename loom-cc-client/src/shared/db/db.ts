@@ -9,7 +9,7 @@ declare const globalThis: {
 } & typeof global
 
 /** Schema version — bump when adding new tables/columns */
-const SCHEMA_VERSION = 14
+const SCHEMA_VERSION = 16
 
 export const GLOBAL_CHAT_PROJECT_ID = '__global_chat__'
 
@@ -567,6 +567,32 @@ function applySchema(db: Database.Database) {
 
     CREATE INDEX IF NOT EXISTS idx_negative_priors_project
       ON negative_priors(project_id, prior_key, created_at DESC);
+
+    -- ── Image generation jobs ───────────────────────────────────────────────
+
+    CREATE TABLE IF NOT EXISTS image_generation_jobs (
+      id              TEXT PRIMARY KEY,
+      session_id      TEXT NOT NULL,
+      status          TEXT NOT NULL DEFAULT 'pending'
+                        CHECK (status IN ('pending', 'merging', 'submitting', 'waiting', 'success', 'error')),
+      provider_id     TEXT NOT NULL DEFAULT '',
+      model           TEXT NOT NULL DEFAULT '',
+      prompt          TEXT NOT NULL DEFAULT '',
+      final_prompt    TEXT NOT NULL DEFAULT '',
+      aspect_ratio    TEXT NOT NULL DEFAULT '1:1',
+      style_id        TEXT NOT NULL DEFAULT 'none',
+      size            TEXT NOT NULL DEFAULT '1024x1024',
+      count           INTEGER NOT NULL DEFAULT 1,
+      reference_images TEXT NOT NULL DEFAULT '[]',
+      result_urls     TEXT NOT NULL DEFAULT '[]',
+      result_metadata TEXT NOT NULL DEFAULT '{}',
+      error_message   TEXT NOT NULL DEFAULT '',
+      started_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+      completed_at    TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_image_generation_jobs_session
+      ON image_generation_jobs(session_id, started_at DESC);
   `)
 
   db.pragma(`user_version = ${SCHEMA_VERSION}`)
@@ -977,6 +1003,32 @@ function runIncrementalMigrations(db: Database.Database) {
       ON runtime_events(created_at);
   `)
   migrateLegacySessionWorkspaceArrays(db)
+  // v15: image generation async job queue.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS image_generation_jobs (
+      id              TEXT PRIMARY KEY,
+      session_id      TEXT NOT NULL,
+      status          TEXT NOT NULL DEFAULT 'pending'
+                        CHECK (status IN ('pending', 'merging', 'submitting', 'waiting', 'success', 'error')),
+      provider_id     TEXT NOT NULL DEFAULT '',
+      model           TEXT NOT NULL DEFAULT '',
+      prompt          TEXT NOT NULL DEFAULT '',
+      final_prompt    TEXT NOT NULL DEFAULT '',
+      aspect_ratio    TEXT NOT NULL DEFAULT '1:1',
+      style_id        TEXT NOT NULL DEFAULT 'none',
+      size            TEXT NOT NULL DEFAULT '1024x1024',
+      count           INTEGER NOT NULL DEFAULT 1,
+      reference_images TEXT NOT NULL DEFAULT '[]',
+      result_urls     TEXT NOT NULL DEFAULT '[]',
+      result_metadata TEXT NOT NULL DEFAULT '{}',
+      error_message   TEXT NOT NULL DEFAULT '',
+      started_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+      completed_at    TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_image_generation_jobs_session
+      ON image_generation_jobs(session_id, started_at DESC);
+  `)
+  try { db.exec(`ALTER TABLE image_generation_jobs ADD COLUMN reference_images TEXT NOT NULL DEFAULT '[]'`) } catch { /* already exists */ }
   db.pragma(`user_version = ${SCHEMA_VERSION}`)
 }
 

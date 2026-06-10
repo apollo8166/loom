@@ -16,6 +16,11 @@ import {
   PERMISSION_OPTIONS, THINKING_OPTIONS, MODEL_ICONS,
 } from '@/components/chat/workbench-parts'
 import { FilePreviewPanel, type PreviewFile } from '@/components/chat/file-preview-panel'
+import { ImageGenToolbar, type ImageGenSettings } from '@/components/chat/image-gen-toolbar'
+import { ImageJobCard, useImageJobPoller } from '@/components/chat/image-job-card'
+import { IMAGE_STYLE_PRESETS, type ImageGenerationConfig } from '@/shared/config/image-generation-config'
+import type { ImageGenHistoryItem } from '@/shared/image-generation/job-executor'
+import type { ImageGenerationJob, StoredReferenceImage } from '@/shared/image-generation/job-store'
 import { ClaudeCodeUsageStats } from '@/components/chat/claude-code-usage-stats'
 import { CaptureWindowOverlay } from '@/components/capture/capture-window-overlay'
 import { CaptureConfirmDialog } from '@/components/capture/capture-confirm-dialog'
@@ -225,6 +230,17 @@ function attachmentPlaceholder(att: Attachment) {
   return `[File #${att.num}]`
 }
 
+function filenameFromServedFileUrl(url: string): string {
+  const match = url.match(/\/api\/files\/(?:serve|upload)\/([^/?#]+)/)
+  if (match?.[1]) return decodeURIComponent(match[1])
+  return url.split('/').pop()?.split(/[?#]/)[0] || 'image.png'
+}
+
+function timestampMs(value?: string | null): number {
+  const ms = Date.parse(value || '')
+  return Number.isFinite(ms) ? ms : 0
+}
+
 function CompactIcon({ size = 14, strokeWidth = 2 }: { size?: number; strokeWidth?: number }) {
   return (
     <svg
@@ -263,6 +279,127 @@ const SLASH_COMMANDS: SlashCmd[] = [
   { name: '/stop',    args: '',                  desc: '停止当前 Agent 执行',               client: true  },
 ]
 
+/* ── Image Gen Job Entry (uses polling hook internally) ── */
+type ImageGenReference = ImageGenSettings['referenceImages'][number]
+
+type ImageGenJobEntryState = {
+  id: string
+  prompt: string
+  jobId: string
+  startedAt: string
+  aspectRatioId: string
+  styleId: string
+  referenceImages: ImageGenReference[]
+}
+
+function imageStyleLabel(styleId: string) {
+  return IMAGE_STYLE_PRESETS.find(style => style.id === styleId)?.label ?? styleId
+}
+
+function ImageGenUserPrompt({
+  prompt,
+  aspectRatioId,
+  styleId,
+  referenceImages,
+}: {
+  prompt: string
+  aspectRatioId: string
+  styleId: string
+  referenceImages: StoredReferenceImage[]
+}) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+      <div style={{
+        maxWidth: '80%',
+        padding: referenceImages.length > 0 ? 8 : '10px 14px',
+        borderRadius: 12,
+        background: 'rgba(59,130,246,0.1)',
+        border: '1px solid rgba(59,130,246,0.2)',
+        color: 'var(--color-text-primary)',
+      }}>
+        {referenceImages.length > 0 && (
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+            {referenceImages.map((img, idx) => (
+              <img
+                key={`${img.serverFilename || img.url}-${idx}`}
+                src={img.url}
+                alt={img.name}
+                style={{
+                  width: 86,
+                  height: 86,
+                  objectFit: 'cover',
+                  borderRadius: 8,
+                  border: '1px solid var(--theme-border)',
+                  background: 'var(--theme-bg-raised)',
+                }}
+              />
+            ))}
+          </div>
+        )}
+        <div style={{ fontSize: 13, lineHeight: 1.55, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+          {prompt}
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--color-text-muted)', marginTop: 6 }}>
+          比例：{aspectRatioId} · 风格：{imageStyleLabel(styleId)}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ImageGenJobEntry({
+  prompt,
+  jobId,
+  aspectRatioId,
+  styleId,
+  referenceImages,
+  onRetry,
+  onEditFromImage,
+}: {
+  prompt: string
+  jobId: string
+  aspectRatioId: string
+  styleId: string
+  referenceImages: ImageGenReference[]
+  onRetry?: () => void
+  onEditFromImage?: (url: string) => void
+}) {
+  const job = useImageJobPoller(jobId || null)
+  const displayedReferenceImages = (job?.referenceImages?.length ? job.referenceImages : referenceImages) as StoredReferenceImage[]
+  const displayedAspectRatio = job?.aspectRatio ?? aspectRatioId
+  const displayedStyleId = job?.styleId ?? styleId
+
+  return (
+    <div style={{ marginBottom: 28 }}>
+      <ImageGenUserPrompt
+        prompt={prompt}
+        aspectRatioId={displayedAspectRatio}
+        styleId={displayedStyleId}
+        referenceImages={displayedReferenceImages}
+      />
+      {/* Job status card */}
+      {jobId ? (
+        job ? (
+          <>
+            <p style={{ fontSize: 12, color: 'var(--color-text-muted)', marginBottom: 6 }}>
+              {job.status === 'success' ? '已完成生成，共返回 1 张图片。' : job.status === 'error' ? '' : '正在生成图像，请保持页面开启。'}
+            </p>
+            <ImageJobCard
+              job={job}
+              onRetry={onRetry}
+              onEditFromImage={onEditFromImage}
+            />
+          </>
+        ) : (
+          <p style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>正在连接...</p>
+        )
+      ) : (
+        <p style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>正在提交请求...</p>
+      )}
+    </div>
+  )
+}
+
 /* ── Main Component ── */
 
 interface WorkbenchViewProps {
@@ -299,10 +436,11 @@ interface WorkbenchViewProps {
     enabledSkills?: string[]
     attachments?: Array<{ name: string; filename: string; mimeType: string; tier: string; originalFilename?: string }>
   }) => void
+  onCreateImageSession?: () => Promise<Session | null>
   hideWorkspaceBar?: boolean
 }
 
-export function WorkbenchView({ project, session, onNewSession, projectName, onPreviewChange, onTasksChange, onModelChange, workspacePath, attachedFolderPaths = [], recentWorkspacePaths = [], workspaceBranch, useWorktree = false, workspaceRequired = false, workspaceIsDefault = false, emptyMode = 'project', onChooseWorkspace, onAddAttachedFolder, onToggleWorktree, pendingAutoSend, onPendingAutoSendConsumed, sessionDraft, onCreateAndSend, hideWorkspaceBar = false }: WorkbenchViewProps) {
+export function WorkbenchView({ project, session, onNewSession, projectName, onPreviewChange, onTasksChange, onModelChange, workspacePath, attachedFolderPaths = [], recentWorkspacePaths = [], workspaceBranch, useWorktree = false, workspaceRequired = false, workspaceIsDefault = false, emptyMode = 'project', onChooseWorkspace, onAddAttachedFolder, onToggleWorktree, pendingAutoSend, onPendingAutoSendConsumed, sessionDraft, onCreateAndSend, onCreateImageSession, hideWorkspaceBar = false }: WorkbenchViewProps) {
   const {
     groups, messages, streaming, isThinking, error,
     isCompacting, compactingText, tasks, memoryNotice,
@@ -348,12 +486,37 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([])
   const attachNumRef = useRef(0)
 
+  // Image generation mode
+  const [imageGenMode, setImageGenMode] = useState(false)
+  const [imageGenConfig, setImageGenConfig] = useState<ImageGenerationConfig | null>(null)
+  const [imageGenSettings, setImageGenSettings] = useState<ImageGenSettings>({
+    providerId: '',
+    aspectRatioId: '1:1',
+    styleId: 'none',
+    referenceImages: [],
+  })
+  const [imageGenJobs, setImageGenJobs] = useState<ImageGenJobEntryState[]>([])
+  const [imageGenSubmitting, setImageGenSubmitting] = useState(false)
+  const imageGenJobIdxRef = useRef(0)
+
+  // Refs for always-fresh values inside handleSend (avoids stale closure)
+  const imageGenModeRef = useRef(false)
+  const imageGenConfigRef = useRef<ImageGenerationConfig | null>(null)
+  const imageGenSettingsRef = useRef<ImageGenSettings>({ providerId: '', aspectRatioId: '1:1', styleId: 'none', referenceImages: [] })
+  const imageGenJobsRef = useRef<ImageGenJobEntryState[]>([])
+
   const [isDragging, setIsDragging] = useState(false)
   const dragCounterRef = useRef(0)
 
   const [previewFile, setPreviewFile] = useState<PreviewFile | null>(null)
   const [windowCaptureOpen, setWindowCaptureOpen] = useState(false)
   const [capturePreviewDataUrl, setCapturePreviewDataUrl] = useState<string | null>(null)
+  // Keep refs in sync with latest state (render body — always current, no useEffect lag)
+  imageGenModeRef.current = imageGenMode
+  imageGenConfigRef.current = imageGenConfig
+  imageGenSettingsRef.current = imageGenSettings
+  imageGenJobsRef.current = imageGenJobs
+
   const effectiveWorkspacePath = workspacePath ?? session?.workspacePath ?? project.workspacePath
   const missingWorkspace = workspaceRequired && !effectiveWorkspacePath
   const canCreateFromEmptyProject = emptyMode === 'project' && !session && !sessionDraft && Boolean(onCreateAndSend)
@@ -364,6 +527,8 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
   const modelRef = useRef<HTMLDivElement>(null)
   const workspaceRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const inputHistoryIndexRef = useRef<number | null>(null)
+  const inputHistoryDraftRef = useRef('')
   const fileInputRef = useRef<HTMLInputElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const messagesContainerRef = useRef<HTMLDivElement>(null)
@@ -377,6 +542,56 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
   useEffect(() => {
     if (session?.id) loadMessages(session.id)
   }, [session?.id, loadMessages])
+
+  useEffect(() => {
+    inputHistoryIndexRef.current = null
+    inputHistoryDraftRef.current = ''
+  }, [session?.id])
+
+  // Fetch image generation config
+  useEffect(() => {
+    fetch('/api/config/image-generation')
+      .then(r => r.json())
+      .then((cfg: ImageGenerationConfig) => {
+        setImageGenConfig(cfg)
+        if (cfg.enabled && cfg.configs.length > 0) {
+          const active = cfg.configs.find(c => c.id === cfg.activeProviderId)
+          setImageGenSettings(prev => ({
+            ...prev,
+            providerId: prev.providerId || cfg.activeProviderId,
+          }))
+        }
+      })
+      .catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    if (!session?.id) {
+      setImageGenJobs([])
+      return
+    }
+
+    let cancelled = false
+    fetch(`/api/image-generation/jobs?sessionId=${encodeURIComponent(session.id)}`)
+      .then(r => r.ok ? r.json() : Promise.reject(new Error('failed to load image jobs')))
+      .then((data: { jobs?: ImageGenerationJob[] }) => {
+        if (cancelled) return
+        setImageGenJobs((data.jobs ?? []).map(job => ({
+          id: job.id,
+          prompt: job.prompt,
+          jobId: job.id,
+          startedAt: job.startedAt,
+          aspectRatioId: job.aspectRatio,
+          styleId: job.styleId,
+          referenceImages: job.referenceImages ?? [],
+        })))
+      })
+      .catch(() => {
+        if (!cancelled) setImageGenJobs([])
+      })
+
+    return () => { cancelled = true }
+  }, [session?.id])
 
   useEffect(() => {
     fetch('/api/config/settings?key=memory_debug_visible')
@@ -504,6 +719,12 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
     }
   }, [input])
 
+  useEffect(() => {
+    if (input !== '') return
+    inputHistoryIndexRef.current = null
+    inputHistoryDraftRef.current = ''
+  }, [input])
+
   // Notify parent when preview opens/closes
   useEffect(() => {
     onPreviewChange?.(previewFile !== null)
@@ -616,6 +837,19 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
     () => new Map(messages.map((message, index) => [message.id, index])),
     [messages],
   )
+  const inputHistory = useMemo(() => {
+    return messages
+      .filter(message => message.role === 'user')
+      .map(message => {
+        const blockText = message.blocks
+          .filter(block => block.type === 'text')
+          .map(block => block.text)
+          .join('')
+          .trim()
+        return blockText || message.content.trim()
+      })
+      .filter(text => text.length > 0)
+  }, [messages])
 
   // Context usage
   const lastGroup = groups[groups.length - 1]
@@ -1171,12 +1405,102 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
     }
   }, [session?.id, session?.model, project.id, project.defaultModel, onModelChange])
 
-  // Handle send
+  const submitImageGeneration = useCallback(async (rawPrompt?: string): Promise<boolean> => {
+    const prompt = (rawPrompt ?? input).trim()
+    if (!prompt || imageGenSubmitting) return false
+
+    const cfg = imageGenConfigRef.current
+    if (!cfg?.enabled) {
+      showNotification('图像生成未启用，请先在设置中开启')
+      return false
+    }
+
+    let sessionId = session?.id ?? ''
+    if (!sessionId) {
+      const created = await onCreateImageSession?.()
+      sessionId = created?.id ?? ''
+    }
+    if (!sessionId) {
+      showNotification('请先创建或选择一个会话再使用图像生成')
+      return false
+    }
+
+    const settings = imageGenSettingsRef.current
+    const referenceImages = settings.referenceImages.map(r => ({
+      name: r.name,
+      url: r.url,
+      serverFilename: r.serverFilename,
+      mimeType: r.mimeType,
+    }))
+    const history = imageGenJobsRef.current
+      .slice(-5)
+      .map(j => ({ prompt: j.prompt, resultUrls: [] as string[] }))
+    const jobEntry: ImageGenJobEntryState = {
+      id: `img-${++imageGenJobIdxRef.current}`,
+      prompt,
+      jobId: '',
+      startedAt: new Date().toISOString(),
+      aspectRatioId: settings.aspectRatioId,
+      styleId: settings.styleId,
+      referenceImages,
+    }
+
+    setImageGenSubmitting(true)
+    setImageGenJobs(prev => [...prev, jobEntry])
+    setInput('')
+    setImageGenMode(false)
+    setImageGenSettings(prev => ({ ...prev, referenceImages: [] }))
+    setTimeout(() => scrollToBottom('smooth'), 50)
+
+    try {
+      const res = await fetch('/api/image-generation/jobs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId,
+          prompt,
+          history,
+          providerId: settings.providerId || cfg.activeProviderId,
+          aspectRatio: settings.aspectRatioId,
+          styleId: settings.styleId,
+          count: 1,
+          referenceImages,
+        }),
+      })
+      const data = await res.json().catch(() => ({})) as { jobId?: string; error?: string }
+      if (!res.ok || data.error || !data.jobId) {
+        showNotification(data.error ?? '图像生成失败，请检查配置')
+        setImageGenJobs(prev => prev.filter(j => j.id !== jobEntry.id))
+        return false
+      }
+      setImageGenJobs(prev => {
+        const next = prev.map(j => j.id === jobEntry.id ? { ...j, jobId: data.jobId! } : j)
+        return next.some(j => j.id === jobEntry.id) ? next : [...next, { ...jobEntry, jobId: data.jobId! }]
+      })
+      return true
+    } catch {
+      showNotification('图像生成请求失败，请检查网络连接')
+      setImageGenJobs(prev => prev.filter(j => j.id !== jobEntry.id))
+      return false
+    } finally {
+      setImageGenSubmitting(false)
+    }
+  }, [imageGenSubmitting, input, onCreateImageSession, scrollToBottom, session?.id, showNotification])
+
+  // Handle send — image gen logic inlined with ref reads to avoid stale closures
   const handleSend = useCallback(() => {
+    // ── Image generation mode ──────────────────────────────────────
+    if (imageGenModeRef.current) {
+      void submitImageGeneration(input)
+      return
+    }
+
     if (missingWorkspace) {
       showNotification('请先为当前会话选择工作目录')
       return
     }
+
+    // ── Normal chat mode ───────────────────────────────────────────
     if ((!input.trim() && attachments.length === 0) || streaming) return
     const trimmed = input.trim()
     if (trimmed.startsWith('/')) {
@@ -1291,7 +1615,48 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
     setInput('')
     setAttachments([])
     scrollToBottom('smooth')
-  }, [input, attachments, streaming, allCmds, execCommand, sendMessage, permissionMode, thinkingMode, planMode, getPlaceholder, missingWorkspace, showNotification, session, sessionDraft, canCreateFromEmptyProject, onCreateAndSend, attachmentOverrideSignature, project.id, scrollToBottom])
+  }, [input, attachments, streaming, allCmds, execCommand, sendMessage, permissionMode, thinkingMode, planMode, getPlaceholder, missingWorkspace, showNotification, session, sessionDraft, canCreateFromEmptyProject, onCreateAndSend, attachmentOverrideSignature, project.id, scrollToBottom, submitImageGeneration])
+
+  const handleInputChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    inputHistoryIndexRef.current = null
+    inputHistoryDraftRef.current = ''
+    setInput(e.target.value)
+  }, [])
+
+  const navigateInputHistory = useCallback((direction: 'up' | 'down', textarea: HTMLTextAreaElement): boolean => {
+    if (imageGenModeRef.current || inputHistory.length === 0) return false
+    const start = textarea.selectionStart ?? input.length
+    const end = textarea.selectionEnd ?? input.length
+    if (start !== end) return false
+
+    const before = input.slice(0, start)
+    const after = input.slice(end)
+    if (direction === 'up' && before.includes('\n')) return false
+    if (direction === 'down' && after.includes('\n')) return false
+
+    let nextIndex: number | null
+    if (direction === 'up') {
+      if (inputHistoryIndexRef.current === null) {
+        inputHistoryDraftRef.current = input
+        nextIndex = inputHistory.length - 1
+      } else {
+        nextIndex = Math.max(0, inputHistoryIndexRef.current - 1)
+      }
+    } else {
+      if (inputHistoryIndexRef.current === null) return false
+      nextIndex = inputHistoryIndexRef.current + 1
+      if (nextIndex >= inputHistory.length) nextIndex = null
+    }
+
+    inputHistoryIndexRef.current = nextIndex
+    const nextValue = nextIndex === null ? inputHistoryDraftRef.current : inputHistory[nextIndex]
+    setInput(nextValue)
+    requestAnimationFrame(() => {
+      textarea.focus()
+      textarea.setSelectionRange(nextValue.length, nextValue.length)
+    })
+    return true
+  }, [input, inputHistory])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Escape' && streaming) { e.preventDefault(); stopStreaming(); return }
@@ -1318,11 +1683,58 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
       }
       if (e.key === 'Escape') { e.preventDefault(); setInput(''); return }
     }
+    if (e.key === 'ArrowUp' && navigateInputHistory('up', e.currentTarget)) { e.preventDefault(); return }
+    if (e.key === 'ArrowDown' && navigateInputHistory('down', e.currentTarget)) { e.preventDefault(); return }
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); handleSend() }
-  }, [streaming, stopStreaming, showPicker, filteredCmds, pickerIdx, input, handleSend, execCommand])
+  }, [streaming, stopStreaming, showPicker, filteredCmds, pickerIdx, input, handleSend, execCommand, navigateInputHistory])
 
   const lastAssistantIdx = messages.reduce((acc, message, index) => message.role === 'assistant' ? index : acc, -1)
   const hasMessages = messages.length > 0
+  const canUseImageComposer = Boolean(session?.id || sessionDraft || canCreateFromEmptyProject || onCreateImageSession)
+  const imagePromptReady = input.trim().length > 0
+  const canSubmitImagePrompt = Boolean(imageGenConfig?.enabled && canUseImageComposer && imagePromptReady && !imageGenSubmitting)
+  const timelineItems = useMemo(() => {
+    const items: Array<
+      | { type: 'message'; key: string; sortAt: number; order: number; groupIndex: number; messageIndex: number; message: NonNullable<typeof groups[number]['messages'][number]> }
+      | { type: 'boundary'; key: string; sortAt: number; order: number; boundary: NonNullable<typeof groups[number]['boundary']> }
+      | { type: 'imageJob'; key: string; sortAt: number; order: number; entry: ImageGenJobEntryState }
+    > = []
+
+    groups.forEach((group, groupIndex) => {
+      group.messages.forEach((message, messageIndex) => {
+        items.push({
+          type: 'message',
+          key: `message-${message.id}-${groupIndex}-${messageIndex}`,
+          sortAt: timestampMs(message.createdAt),
+          order: items.length,
+          groupIndex,
+          messageIndex,
+          message,
+        })
+      })
+      if (group.boundary) {
+        items.push({
+          type: 'boundary',
+          key: `boundary-${group.boundary.id}-${groupIndex}`,
+          sortAt: timestampMs(group.boundary.createdAt),
+          order: items.length,
+          boundary: group.boundary,
+        })
+      }
+    })
+
+    imageGenJobs.forEach((entry, index) => {
+      items.push({
+        type: 'imageJob',
+        key: `image-${entry.id}`,
+        sortAt: timestampMs(entry.startedAt),
+        order: items.length + index,
+        entry,
+      })
+    })
+
+    return items.sort((a, b) => (a.sortAt - b.sortAt) || (a.order - b.order))
+  }, [groups, imageGenJobs])
 
   const renderBoundaryStats = (boundary: NonNullable<typeof groups[number]['boundary']>) => {
     if (boundary.boundaryType !== 'compact') return null
@@ -1370,6 +1782,113 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
       </div>
     )
   }
+
+  const renderBoundaryBlock = (boundary: NonNullable<typeof groups[number]['boundary']>) => (
+    <div style={{ padding: '8px 0 24px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', alignItems: 'center', gap: 14, marginBottom: 12 }}>
+        <div style={{ height: 2, background: 'linear-gradient(90deg, transparent, var(--color-accent-primary))', opacity: boundary.boundaryType === 'compact' ? 0.8 : 0.45 }} />
+        <span style={{
+          fontSize: 12,
+          fontWeight: 800,
+          color: boundary.boundaryType === 'compact' ? 'var(--color-accent-primary)' : 'var(--color-text-muted)',
+          background: 'var(--color-bg-surface)',
+          border: boundary.boundaryType === 'compact'
+            ? '1px solid var(--color-accent-primary)'
+            : '1px solid var(--color-border-subtle)',
+          borderRadius: 999,
+          padding: '6px 14px',
+          whiteSpace: 'nowrap',
+          userSelect: 'none',
+          boxShadow: boundary.boundaryType === 'compact' ? '0 10px 28px rgba(15,23,42,0.08)' : undefined,
+        }}>
+          {boundary.boundaryType === 'compact'
+            ? '上下文已压缩 · 新上下文从此开始'
+            : '以上对话已归档，不会带入新的上下文'}
+        </span>
+        <div style={{ height: 2, background: 'linear-gradient(90deg, var(--color-accent-primary), transparent)', opacity: boundary.boundaryType === 'compact' ? 0.8 : 0.45 }} />
+      </div>
+      <div style={{
+        background: 'var(--color-bg-surface)',
+        border: boundary.boundaryType === 'compact'
+          ? '1px solid var(--color-accent-primary)'
+          : '1px solid var(--color-border-subtle)',
+        borderRadius: 14,
+        padding: '14px 16px',
+        boxShadow: boundary.boundaryType === 'compact'
+          ? '0 14px 36px rgba(15,23,42,0.07)'
+          : '0 8px 24px rgba(15,23,42,0.04)',
+      }}>
+        <div style={{
+          fontSize: 10,
+          color: 'var(--color-text-muted)',
+          marginBottom: 7,
+          letterSpacing: '0.08em',
+          textTransform: 'uppercase',
+          fontWeight: 700,
+        }}>
+          压缩摘要
+        </div>
+        {renderBoundaryStats(boundary)}
+        <div style={{
+          fontSize: 12,
+          color: boundary.summary ? 'var(--color-text-secondary)' : 'var(--color-text-muted)',
+          whiteSpace: 'pre-wrap',
+          lineHeight: 1.65,
+        }}>
+          {boundary.summary || '本次压缩没有生成摘要；以上历史已从新上下文中移除。'}
+        </div>
+      </div>
+    </div>
+  )
+
+  const renderImageJobTimelineEntry = (entry: ImageGenJobEntryState) => (
+    <ImageGenJobEntry
+      prompt={entry.prompt}
+      jobId={entry.jobId}
+      aspectRatioId={entry.aspectRatioId}
+      styleId={entry.styleId}
+      referenceImages={entry.referenceImages}
+      onRetry={async () => {
+        if (!entry.jobId || !session?.id) return
+        const res = await fetch(`/api/image-generation/jobs/${entry.jobId}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ history: imageGenJobs.slice(-5).map(j => ({ prompt: j.prompt, resultUrls: [] })) }),
+        }).catch(() => null)
+        if (!res?.ok) {
+          const data = res ? await res.json().catch(() => ({})) as { error?: string } : {}
+          showNotification(data.error ?? '重新生成失败，请检查配置')
+          return
+        }
+        const data = await res.json().catch(() => ({})) as { jobId?: string }
+        if (!data.jobId) {
+          showNotification('重新生成失败，未返回任务 ID')
+          return
+        }
+        setImageGenJobs(prev => ([
+          ...prev,
+          {
+            id: data.jobId!,
+            prompt: entry.prompt,
+            jobId: data.jobId!,
+            startedAt: new Date().toISOString(),
+            aspectRatioId: entry.aspectRatioId,
+            styleId: entry.styleId,
+            referenceImages: entry.referenceImages,
+          },
+        ]))
+        setTimeout(() => scrollToBottom('smooth'), 50)
+      }}
+      onEditFromImage={(url) => {
+        const filename = filenameFromServedFileUrl(url)
+        setImageGenMode(true)
+        setImageGenSettings(prev => ({
+          ...prev,
+          referenceImages: [...prev.referenceImages, { name: filename, url, serverFilename: filename, mimeType: 'image/png' }],
+        }))
+      }}
+    />
+  )
 
   const renderEmptyCommandPanel = () => {
     if (!commandPanel) return null
@@ -1645,7 +2164,7 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
             gap: 32,
           }}>
 
-            {(!session || (!hasMessages && !streaming)) && (
+            {(!session || (!hasMessages && imageGenJobs.length === 0 && !streaming)) && (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', paddingTop: 80, paddingBottom: 32, gap: 16 }}>
                 <p style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>发消息开始对话</p>
               </div>
@@ -1674,94 +2193,39 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
               </div>
             )}
 
-            {groups.map((group, gi) => (
-              <div key={`group-${gi}`}>
-                {group.messages.map((msg, i) => {
-                  const flatIdx = messageRenderIndexById.get(msg.id) ?? -1
-                  const renderKey = `${msg.id}-${gi}-${i}`
-                  return (
-                    <div key={renderKey} style={{ marginBottom: 32 }}>
-                      {msg.role === 'user' ? (
-                        <UserMessage blocks={msg.blocks} fallbackContent={msg.content} onPreviewFile={setPreviewFile} />
-                      ) : (
-                        <>
-                          <AssistantMessage
-                            blocks={msg.blocks}
-                            streaming={streaming && (flatIdx === lastAssistantIdx || (gi === groups.length - 1 && i === group.messages.length - 1 && streaming))}
-                            isThinking={isThinking && streaming && flatIdx === lastAssistantIdx}
-                            thinkingMode={thinkingMode}
-                            onPermissionDecision={sendPermissionDecision}
-                            onAskUserQuestionResponse={sendAskUserQuestionResponse}
-                            onPreviewFile={setPreviewFile}
-                            elapsedSeconds={msg.elapsedSeconds}
-                            inputTokens={msg.inputTokens}
-                            outputTokens={msg.outputTokens}
-                          />
-                        </>
-                      )}
-                    </div>
-                  )
-                })}
+            {timelineItems.map(item => {
+              if (item.type === 'boundary') {
+                return <div key={item.key}>{renderBoundaryBlock(item.boundary)}</div>
+              }
+              if (item.type === 'imageJob') {
+                return <div key={item.key}>{renderImageJobTimelineEntry(item.entry)}</div>
+              }
 
-                {group.boundary && (
-                  <div style={{ padding: '8px 0 24px' }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', alignItems: 'center', gap: 14, marginBottom: 12 }}>
-                      <div style={{ height: 2, background: 'linear-gradient(90deg, transparent, var(--color-accent-primary))', opacity: group.boundary.boundaryType === 'compact' ? 0.8 : 0.45 }} />
-                      <span style={{
-                        fontSize: 12,
-                        fontWeight: 800,
-                        color: group.boundary.boundaryType === 'compact' ? 'var(--color-accent-primary)' : 'var(--color-text-muted)',
-                        background: 'var(--color-bg-surface)',
-                        border: group.boundary.boundaryType === 'compact'
-                          ? '1px solid var(--color-accent-primary)'
-                          : '1px solid var(--color-border-subtle)',
-                        borderRadius: 999,
-                        padding: '6px 14px',
-                        whiteSpace: 'nowrap',
-                        userSelect: 'none',
-                        boxShadow: group.boundary.boundaryType === 'compact' ? '0 10px 28px rgba(15,23,42,0.08)' : undefined,
-                      }}>
-                        {group.boundary.boundaryType === 'compact'
-                          ? '上下文已压缩 · 新上下文从此开始'
-                          : '以上对话已归档，不会带入新的上下文'}
-                      </span>
-                      <div style={{ height: 2, background: 'linear-gradient(90deg, var(--color-accent-primary), transparent)', opacity: group.boundary.boundaryType === 'compact' ? 0.8 : 0.45 }} />
-                    </div>
-                    <div style={{
-                      background: 'var(--color-bg-surface)',
-                      border: group.boundary.boundaryType === 'compact'
-                        ? '1px solid var(--color-accent-primary)'
-                        : '1px solid var(--color-border-subtle)',
-                      borderRadius: 14,
-                      padding: '14px 16px',
-                      boxShadow: group.boundary.boundaryType === 'compact'
-                        ? '0 14px 36px rgba(15,23,42,0.07)'
-                        : '0 8px 24px rgba(15,23,42,0.04)',
-                    }}>
-                      <div style={{
-                        fontSize: 10,
-                        color: 'var(--color-text-muted)',
-                        marginBottom: 7,
-                        letterSpacing: '0.08em',
-                        textTransform: 'uppercase',
-                        fontWeight: 700,
-                      }}>
-                        压缩摘要
-                      </div>
-                      {renderBoundaryStats(group.boundary)}
-                      <div style={{
-                        fontSize: 12,
-                        color: group.boundary.summary ? 'var(--color-text-secondary)' : 'var(--color-text-muted)',
-                        whiteSpace: 'pre-wrap',
-                        lineHeight: 1.65,
-                      }}>
-                        {group.boundary.summary || '本次压缩没有生成摘要；以上历史已从新上下文中移除。'}
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-            ))}
+              const msg = item.message
+              const flatIdx = messageRenderIndexById.get(msg.id) ?? -1
+              const group = groups[item.groupIndex]
+              const isLastGroupMessage = item.groupIndex === groups.length - 1 && item.messageIndex === (group?.messages.length ?? 0) - 1
+              return (
+                <div key={item.key} style={{ marginBottom: 32 }}>
+                  {msg.role === 'user' ? (
+                    <UserMessage blocks={msg.blocks} fallbackContent={msg.content} onPreviewFile={setPreviewFile} />
+                  ) : (
+                    <AssistantMessage
+                      blocks={msg.blocks}
+                      streaming={streaming && (flatIdx === lastAssistantIdx || (isLastGroupMessage && streaming))}
+                      isThinking={isThinking && streaming && flatIdx === lastAssistantIdx}
+                      thinkingMode={thinkingMode}
+                      onPermissionDecision={sendPermissionDecision}
+                      onAskUserQuestionResponse={sendAskUserQuestionResponse}
+                      onPreviewFile={setPreviewFile}
+                      elapsedSeconds={msg.elapsedSeconds}
+                      inputTokens={msg.inputTokens}
+                      outputTokens={msg.outputTokens}
+                    />
+                  )}
+                </div>
+              )
+            })}
 
             {/* ── Command Panel ── */}
             {commandPanel && (
@@ -1992,7 +2456,7 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
       {/* ── Input Area ── */}
       <div style={{ padding: '12px', flexShrink: 0 }}>
         {/* Attachment previews */}
-        {(attachments.length > 0 || pendingAttachments.length > 0) && (
+        {(attachments.length > 0 || pendingAttachments.length > 0 || (imageGenMode && imageGenSettings.referenceImages.length > 0)) && (
           <div style={{ width: '100%', margin: '0 0 10px', display: 'flex', flexWrap: 'wrap', gap: 8 }}>
             {pendingAttachments.map(p => (
               <div key={p.id} style={{ position: 'relative', borderRadius: 5, padding: 6, width: 200, background: 'var(--theme-bg-raised)', border: '1px solid var(--theme-border)', overflow: 'hidden', flexShrink: 0 }}>
@@ -2059,6 +2523,39 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
                 </div>
               )
             })}
+            {imageGenMode && imageGenSettings.referenceImages.map((img, i) => (
+              <div
+                key={`${img.serverFilename || img.url}-${i}`}
+                className="group/att"
+                style={{ position: 'relative', borderRadius: 5, padding: 6, maxWidth: 216, background: 'var(--theme-bg-raised)', border: '1px solid var(--theme-border)', cursor: 'pointer', flexShrink: 0 }}
+                title="点击预览"
+                onClick={() => setPreviewFile({ url: img.url, name: img.name, mimeType: img.mimeType })}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div style={{ width: 40, height: 40, borderRadius: 4, overflow: 'hidden', flexShrink: 0, position: 'relative' }}>
+                    <img src={img.url} alt={img.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <p style={{ fontSize: 11, fontWeight: 500, color: 'var(--color-text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{img.name}</p>
+                    <p style={{ fontSize: 10, color: 'var(--color-text-muted)' }}>参考图</p>
+                  </div>
+                </div>
+                <button
+                  onClick={e => {
+                    e.stopPropagation()
+                    setImageGenSettings(prev => ({
+                      ...prev,
+                      referenceImages: prev.referenceImages.filter((_, idx) => idx !== i),
+                    }))
+                  }}
+                  className="opacity-0 group-hover/att:opacity-100 transition-opacity"
+                  style={{ position: 'absolute', top: 2, right: 2, width: 16, height: 16, borderRadius: '50%', background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: 'none', cursor: 'pointer' }}
+                  title="移除参考图"
+                >
+                  <X size={8} style={{ color: 'white' }} />
+                </button>
+              </div>
+            ))}
           </div>
         )}
 
@@ -2336,10 +2833,10 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
             <textarea
               ref={textareaRef}
               value={input}
-              onChange={e => setInput(e.target.value)}
+              onChange={handleInputChange}
               onKeyDown={handleKeyDown}
-              placeholder={streaming ? 'AI 正在处理中...' : missingWorkspace ? '请先选择工作目录...' : canCompose ? '和 AI 助手对话...' : '请先创建会话'}
-              disabled={!canCompose || isCompacting || missingWorkspace}
+              placeholder={imageGenMode ? '描述要生成的图像...' : streaming ? 'AI 正在处理中...' : missingWorkspace ? '请先选择工作目录...' : canCompose ? '和 AI 助手对话...' : '请先创建会话'}
+              disabled={imageGenMode ? (!canUseImageComposer || isCompacting) : (!canCompose || isCompacting || missingWorkspace)}
               rows={1}
               className="chat-composer-textarea w-full bg-transparent resize-none outline-none text-[13px] leading-relaxed"
               style={{
@@ -2354,7 +2851,17 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
 
             {/* Toolbar */}
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 12px', height: 44 }}>
-              {/* Left: attach + permission */}
+              {/* Image gen mode toolbar (replaces left section) */}
+              {imageGenMode && imageGenConfig ? (
+                <ImageGenToolbar
+                  config={imageGenConfig}
+                  settings={imageGenSettings}
+                  onSettingsChange={partial => setImageGenSettings(prev => ({ ...prev, ...partial }))}
+                  onClose={() => setImageGenMode(false)}
+                  disabled={!canUseImageComposer || imageGenSubmitting}
+                />
+              ) : (
+              /* Left: attach + permission */
               <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                 <input ref={fileInputRef} type="file" className="hidden" multiple accept={Array.from(SUPPORTED_EXTENSIONS).join(',')} onChange={e => handleFileUpload(e.target.files)} />
                 <button
@@ -2430,11 +2937,42 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
                     </div>
                   )}
                 </div>
+
+                {/* Image generation entry button */}
+                {imageGenConfig?.enabled && (
+                  <>
+                    <div style={{ width: 1, height: 18, background: 'rgba(255,255,255,0.1)', margin: '0 2px' }} />
+                    <button
+                      onClick={() => setImageGenMode(true)}
+                      disabled={!canUseImageComposer}
+                      title="图像生成"
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 5, height: 32,
+                        border: '1px solid rgba(255,255,255,0.1)',
+                        borderRadius: 7, padding: '0 10px',
+                        background: 'transparent',
+                        color: 'var(--color-text-muted)',
+                        cursor: canUseImageComposer ? 'pointer' : 'default',
+                        fontSize: 12, whiteSpace: 'nowrap',
+                      }}
+                      onMouseEnter={e => { if (canUseImageComposer) (e.currentTarget as HTMLElement).style.background = 'var(--theme-bg-hover)' }}
+                      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                        <circle cx="8.5" cy="8.5" r="1.5" />
+                        <polyline points="21 15 16 10 5 21" />
+                      </svg>
+                      <span>图像生成</span>
+                    </button>
+                  </>
+                )}
               </div>
+              )}
 
               {/* Center: context bars + compact suggestion */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, justifyContent: 'center', position: 'relative' }}>
-                {contextUsed > 0 && (
+                {!imageGenMode && contextUsed > 0 && (
                   <div
                     style={{ display: 'flex', alignItems: 'center', gap: 6, border: 'none', background: 'transparent', padding: 0 }}
                     title={contextUsageTitle}
@@ -2459,7 +2997,7 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
                     </span>
                   </div>
                 )}
-                {contextPct >= 60 && (
+                {!imageGenMode && contextPct >= 60 && (
                   <button
                     onClick={() => compact()}
                     style={{
@@ -2568,7 +3106,8 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
                 </div>
 
                 {/* Send / Stop */}
-                {streaming ? (
+                {/* In image gen mode always show send button; stop button is only for AI chat */}
+                {streaming && !imageGenMode ? (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 4 }}>
                     <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>Esc 中断</span>
                     <button
@@ -2582,15 +3121,15 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
                 ) : (
                   <button
                     onClick={handleSend}
-                    disabled={!canCompose || missingWorkspace || (!input.trim() && attachments.length === 0)}
+                    disabled={imageGenMode ? !canSubmitImagePrompt : (!canCompose || missingWorkspace || (!input.trim() && attachments.length === 0))}
                     style={{
                       display: 'flex', alignItems: 'center', justifyContent: 'center',
                       width: 32, height: 32, borderRadius: 8, marginLeft: 4,
-                      background: (canCompose && !missingWorkspace && (input.trim() || attachments.length > 0)) ? '#F59E0B' : 'rgba(245,158,11,0.2)',
-                      border: 'none', cursor: (canCompose && !missingWorkspace && (input.trim() || attachments.length > 0)) ? 'pointer' : 'default',
-                      color: (canCompose && !missingWorkspace && (input.trim() || attachments.length > 0)) ? '#000' : 'rgba(245,158,11,0.4)',
+                      background: (imageGenMode ? canSubmitImagePrompt : (canCompose && !missingWorkspace && (!!input.trim() || attachments.length > 0))) ? '#F59E0B' : 'rgba(245,158,11,0.2)',
+                      border: 'none', cursor: (imageGenMode ? canSubmitImagePrompt : (canCompose && !missingWorkspace && (!!input.trim() || attachments.length > 0))) ? 'pointer' : 'default',
+                      color: (imageGenMode ? canSubmitImagePrompt : (canCompose && !missingWorkspace && (!!input.trim() || attachments.length > 0))) ? '#000' : 'rgba(245,158,11,0.4)',
                     }}
-                    title="发送 (Enter)"
+                    title={imageGenMode ? '生成图像 (Enter)' : '发送 (Enter)'}
                   >
                     <ArrowUp size={15} />
                   </button>

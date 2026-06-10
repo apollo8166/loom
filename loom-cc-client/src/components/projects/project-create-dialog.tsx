@@ -7,7 +7,7 @@ import { Plus, FolderOpen, ChevronRight, ArrowLeft, X } from 'lucide-react'
 interface ProjectCreateDialogProps {
   open: boolean
   onClose: () => void
-  onCreate: (name: string, workspacePath: string, defaultModel: string) => void
+  onCreate: (name: string, workspacePath: string, description: string, defaultModel: string) => void | Promise<void>
 }
 
 type Step = 'choose' | 'scratch' | 'existing'
@@ -19,6 +19,7 @@ function getLastSegment(p: string) {
 export function ProjectCreateDialog({ open, onClose, onCreate }: ProjectCreateDialogProps) {
   const [step, setStep] = useState<Step>('choose')
   const [name, setName] = useState('')
+  const [nameManuallyEdited, setNameManuallyEdited] = useState(false)
   const [instructions, setInstructions] = useState('')
   const [workspacePath, setWorkspacePath] = useState('')
   const [defaultModel, setDefaultModel] = useState('claude-sonnet-4-6')
@@ -40,6 +41,7 @@ export function ProjectCreateDialog({ open, onClose, onCreate }: ProjectCreateDi
   const reset = () => {
     setStep('choose')
     setName('')
+    setNameManuallyEdited(false)
     setInstructions('')
     setWorkspacePath('')
     setCreating(false)
@@ -51,12 +53,17 @@ export function ProjectCreateDialog({ open, onClose, onCreate }: ProjectCreateDi
     if (!name.trim() || creating) return
     setCreating(true)
     try {
-      onCreate(name.trim(), workspacePath.trim(), defaultModel)
+      await onCreate(name.trim(), workspacePath.trim(), instructions.trim(), defaultModel)
       reset()
     } finally {
       setCreating(false)
     }
-  }, [name, workspacePath, defaultModel, creating, onCreate])
+  }, [name, workspacePath, instructions, defaultModel, creating, onCreate])
+
+  const handleNameChange = useCallback((value: string) => {
+    setName(value)
+    setNameManuallyEdited(true)
+  }, [])
 
   /* Pick folder (used in both existing step and scratch location picker) */
   const handleBrowseFolder = useCallback(async () => {
@@ -64,14 +71,14 @@ export function ProjectCreateDialog({ open, onClose, onCreate }: ProjectCreateDi
     if (!dir) return
     setWorkspacePath(dir)
     const seg = getLastSegment(dir)
-    if (seg) {
+    if (seg && (!name.trim() || !nameManuallyEdited)) {
       setName(seg)
       setTimeout(() => {
         nameRef.current?.select()
         nameRef.current?.focus()
       }, 50)
     }
-  }, [])
+  }, [name, nameManuallyEdited])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Escape') handleClose()
@@ -115,7 +122,7 @@ export function ProjectCreateDialog({ open, onClose, onCreate }: ProjectCreateDi
             ref={nameRef}
             type="text"
             value={name}
-            onChange={e => setName(e.target.value)}
+            onChange={e => handleNameChange(e.target.value)}
             placeholder="项目名称"
             autoFocus={!showFolderAtTop}
             className="w-full outline-none selectable"
@@ -255,7 +262,7 @@ export function ProjectCreateDialog({ open, onClose, onCreate }: ProjectCreateDi
                     ref={nameRef}
                     type="text"
                     value={name}
-                    onChange={e => setName(e.target.value)}
+                    onChange={e => handleNameChange(e.target.value)}
                     placeholder="项目名称"
                     className="w-full outline-none selectable"
                     style={styles.input}

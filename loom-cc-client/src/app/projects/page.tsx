@@ -13,8 +13,8 @@ export default function ProjectsPage() {
   const { projects, loading, error, createProject, pinProject, updateProject, archiveProject } = useProjects()
   const [showCreate, setShowCreate] = useState(false)
 
-  const handleCreate = useCallback(async (name: string, workspacePath: string, defaultModel: string) => {
-    const project = await createProject(name, workspacePath, defaultModel)
+  const handleCreate = useCallback(async (name: string, workspacePath: string, description: string, defaultModel: string) => {
+    const project = await createProject(name, workspacePath, description, defaultModel)
     if (project) {
       setShowCreate(false)
       router.push(`/projects/${project.id}`)

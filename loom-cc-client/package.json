@@ -1,6 +1,6 @@
 {
   "name": "loom-cc-client",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Loom CC — 通用 Claude Code 风格桌面工作台",
   "author": "FEICAI <https://github.com/feicaiclub>",
   "license": "Apache-2.0",

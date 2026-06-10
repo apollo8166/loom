@@ -1,6 +1,7 @@
 import type { ImageProviderConfig } from '@/shared/config/image-generation-config'
 import type { GeneratedImage, GenerateImageRequest } from './types'
 import { sanitizeImagePrompt } from './prompt-safety'
+import { generateNanoBananaImage } from './providers/nano-banana'
 import { generateOpenAiImage } from './providers/openai'
 import { generateSeedreamImage } from './providers/seedream'
 
@@ -32,11 +33,14 @@ export async function generateImage(
     throw new Error(`${provider.name} does not support reference images`)
   }
 
-  if (provider.id === 'openai' || provider.apiFormat === 'openai-images') {
-    return generateOpenAiImage(provider, { ...normalizedRequest, mode: effectiveMode })
+  if (provider.id === 'nano-banana' || provider.apiFormat === 'openai-chat-completions') {
+    return generateNanoBananaImage(provider, { ...normalizedRequest, mode: effectiveMode })
   }
-  if (provider.id === 'seedream' || provider.apiFormat === 'ark-images') {
+  if (provider.apiFormat === 'ark-images') {
     return generateSeedreamImage(provider, { ...normalizedRequest, mode: effectiveMode })
+  }
+  if (provider.apiFormat === 'openai-images' || provider.id === 'openai') {
+    return generateOpenAiImage(provider, { ...normalizedRequest, mode: effectiveMode })
   }
   throw new Error(`Unsupported image provider: ${provider.id}`)
 }

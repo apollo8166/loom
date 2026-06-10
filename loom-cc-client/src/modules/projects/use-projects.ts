@@ -30,13 +30,14 @@ export function useProjects() {
   const createProject = useCallback(async (
     name: string,
     workspacePath: string,
+    description?: string,
     defaultModel?: string,
   ): Promise<Project | null> => {
     try {
       const res = await fetch('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, workspacePath, defaultModel }),
+        body: JSON.stringify({ name, description, workspacePath, defaultModel }),
       })
       if (!res.ok) {
         const data = await res.json()

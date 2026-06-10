@@ -166,6 +166,18 @@ export default function ProjectPage({ params }: ProjectPageProps) {
     })
   }, [project, sessionDraft?.workspacePath, createSession])
 
+  const handleCreateImageSession = useCallback(async () => {
+    if (!project) return null
+    const newSession = await createSession(project.defaultModel, 'Image Generation', {
+      workspacePath: sessionDraft?.workspacePath ?? project.workspacePath ?? undefined,
+      attachedFolderPaths: sessionDraft?.attachedFolderPaths ?? [],
+      useWorktree: sessionDraft?.useWorktree ?? false,
+    })
+    if (!newSession) return null
+    setSessionDraft(null)
+    return newSession
+  }, [project, sessionDraft, createSession])
+
   const handleDeleteSession = useCallback(async (sessionId: string) => {
     await deleteSession(sessionId)
   }, [deleteSession])
@@ -225,6 +237,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
             onPendingAutoSendConsumed={() => setPendingAutoSend(null)}
             sessionDraft={sessionDraft}
             onCreateAndSend={handleCreateAndSend}
+            onCreateImageSession={handleCreateImageSession}
             workspacePath={project.workspacePath ?? undefined}
             attachedFolderPaths={activeSession?.attachedFolderPaths ?? []}
             useWorktree={activeSession?.useWorktree ?? false}

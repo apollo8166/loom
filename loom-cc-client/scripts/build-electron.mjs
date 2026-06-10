@@ -1,7 +1,7 @@
 import { build } from 'esbuild'
 import {
-  readdirSync, lstatSync, readlinkSync, rmSync, cpSync,
-  readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync,
+  readdirSync, lstatSync, statSync, readlinkSync, rmSync, cpSync,
+  readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync, unlinkSync,
 } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
@@ -39,6 +39,7 @@ async function buildElectron() {
 // Step 2: Resolve symlinks in .next/standalone
 function resolveSymlinks(dir) {
   let resolved = 0
+  let removedDangling = 0
   function walk(d) {
     let entries
     try {
@@ -50,19 +51,29 @@ function resolveSymlinks(dir) {
       const fullPath = join(d, entry.name)
       try {
         const stat = lstatSync(fullPath)
-        if (stat.isSymbolicLink()) {
+        if (entry.isSymbolicLink() || stat.isSymbolicLink()) {
           const realPath = resolve(d, readlinkSync(fullPath))
-          rmSync(fullPath, { force: true })
+          let realStat
           try {
-            const realStat = lstatSync(realPath)
+            realStat = statSync(realPath)
+          } catch {
+            try { unlinkSync(fullPath) } catch { /* ignore */ }
+            // Target doesn't exist; dangling symlinks break electron-builder packaging.
+            removedDangling++
+            continue
+          }
+
+          try {
+            unlinkSync(fullPath)
             if (realStat.isDirectory()) {
-              cpSync(realPath, fullPath, { recursive: true })
+              cpSync(realPath, fullPath, { recursive: true, dereference: true })
             } else {
-              cpSync(realPath, fullPath)
+              cpSync(realPath, fullPath, { dereference: true })
             }
             resolved++
           } catch {
-            // Target doesn't exist, just remove the dangling symlink
+            // Target can't be copied; keep the symlink removed so electron-builder can continue.
+            removedDangling++
           }
         } else if (stat.isDirectory()) {
           walk(fullPath)
@@ -73,7 +84,8 @@ function resolveSymlinks(dir) {
     }
   }
   walk(dir)
-  console.log(`✅ Resolved ${resolved} symlinks in standalone`)
+  const suffix = removedDangling > 0 ? `, removed ${removedDangling} dangling symlink(s)` : ''
+  console.log(`✅ Resolved ${resolved} symlinks in standalone${suffix}`)
 }
 
 function findStandaloneAppRoot(standaloneDir) {

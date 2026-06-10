@@ -172,6 +172,18 @@ export default function ChatPage() {
     })
   }, [project, sessionDraft, createSession])
 
+  const handleCreateImageSession = useCallback(async () => {
+    if (!project) return null
+    const newSession = await createSession(project.defaultModel, 'Image Generation', {
+      workspacePath: (sessionDraft?.workspacePath ?? defaultWorkspacePath) || undefined,
+      attachedFolderPaths: sessionDraft?.attachedFolderPaths ?? [],
+      useWorktree: sessionDraft?.useWorktree ?? false,
+    })
+    if (!newSession) return null
+    setSessionDraft(null)
+    return newSession
+  }, [project, sessionDraft, defaultWorkspacePath, createSession])
+
   const handleRenameSession = useCallback(async (sessionId: string, title: string) => {
     await updateSession(sessionId, { title })
   }, [updateSession])
@@ -223,6 +235,7 @@ export default function ChatPage() {
         onModelChange={handleModelChange}
         sessionDraft={sessionDraft}
         onCreateAndSend={handleCreateAndSend}
+        onCreateImageSession={handleCreateImageSession}
         pendingAutoSend={pendingAutoSend}
         onPendingAutoSendConsumed={() => setPendingAutoSend(null)}
       />

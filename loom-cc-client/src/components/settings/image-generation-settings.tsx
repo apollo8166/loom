@@ -15,6 +15,7 @@ import {
 const PROVIDER_LABELS: Record<ImageProviderId, string> = {
   openai: 'GPT-Image2 / OpenAI',
   seedream: 'SeeDream / 火山方舟',
+  'nano-banana': 'Nano Banana 2',
 }
 
 type TestState =
@@ -46,6 +47,21 @@ export function ImageGenerationSettings() {
 
   const activeConfig = config.configs.find(c => c.id === activeTabId)
     ?? DEFAULT_IMAGE_GENERATION_CONFIG.configs.find(c => c.id === activeTabId)!
+  const apiKeyPlaceholder = activeTabId === 'seedream'
+    ? '火山方舟 API Key'
+    : activeTabId === 'nano-banana'
+      ? '中转站 API Key'
+      : 'sk-...'
+  const baseUrlPlaceholder = activeTabId === 'seedream'
+    ? 'https://ark.cn-beijing.volces.com/api/v3'
+    : activeTabId === 'nano-banana'
+      ? 'https://你的中转站/v1'
+      : 'https://api.openai.com/v1'
+  const modelPlaceholder = activeTabId === 'seedream'
+    ? 'doubao-seedream-4-0-250828'
+    : activeTabId === 'nano-banana'
+      ? '填写中转站中的模型 ID'
+      : 'gpt-image-2'
 
   const updateActiveConfig = useCallback((patch: Partial<ImageProviderConfig>) => {
     setConfig(prev => ({
@@ -197,7 +213,7 @@ export function ImageGenerationSettings() {
                 type={showKey ? 'text' : 'password'}
                 value={activeConfig.apiKey}
                 onChange={e => updateActiveConfig({ apiKey: e.target.value })}
-                placeholder={activeTabId === 'openai' ? 'sk-...' : '火山方舟 API Key'}
+                placeholder={apiKeyPlaceholder}
                 autoComplete="new-password"
                 style={{ ...inputStyle, paddingRight: 36 }}
               />
@@ -234,7 +250,7 @@ export function ImageGenerationSettings() {
             type="text"
             value={activeConfig.baseUrl}
             onChange={e => updateActiveConfig({ baseUrl: e.target.value })}
-            placeholder={activeTabId === 'openai' ? 'https://api.openai.com/v1' : 'https://ark.cn-beijing.volces.com/api/v3'}
+            placeholder={baseUrlPlaceholder}
             style={inputStyle}
           />
         </div>
@@ -245,7 +261,7 @@ export function ImageGenerationSettings() {
             type="text"
             value={activeConfig.model}
             onChange={e => updateActiveConfig({ model: e.target.value })}
-            placeholder={activeTabId === 'openai' ? 'gpt-image-2' : 'doubao-seedream-4-0-250828'}
+            placeholder={modelPlaceholder}
             style={inputStyle}
           />
         </div>

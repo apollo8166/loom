@@ -14,7 +14,7 @@ Loom 既是一个可以直接使用的本地 AI 工作台，也是一套帮助�
 
 [下载安装](#下载安装) | [快速开始](#快速开始) | [为什么选择-Loom](#为什么选择-loom) | [核心功能](#核心功能) | [Memory](#memory-与上下文管理) | [Skills](#skills) | [开发](#开发)
 
-> 当前状态：早期开源版本。Loom 已具备桌面 Chat、项目工作区、Token 统计、Skills、记忆、定时任务、MCP/Agents 命令入口等基础能力；Harness、Marketplace 和插件系统仍在持续完善。
+> 当前状态：早期开源版本。Loom 已具备桌面 Chat、项目工作区、Token 统计、Skills、记忆、定时任务、MCP / Agents 管理、图像生成和飞书 / Lark 通道基础能力；Harness、Marketplace 和插件系统仍在持续完善。
 
 <a id="screenshot-workbench-main"></a>
 
@@ -132,8 +132,8 @@ Loom 未来会支持更完整的插件系统。插件可以内置或扩展运行
 
 1. 打开 [Releases](https://github.com/apollo8166/loom/releases/latest)。
 2. 根据设备下载对应安装包：
-   - `loom-cc-v0.1.0-mac-arm64.dmg`：Apple Silicon / M 系列 Mac。
-   - `loom-cc-v0.1.0-mac-x64.dmg`：Intel Mac。
+   - `loom-cc-v0.2.0-mac-arm64.dmg`：Apple Silicon / M 系列 Mac。
+   - `loom-cc-v0.2.0-mac-x64.dmg`：Intel Mac。
 3. 安装并打开 Loom。
 4. 在设置中配置模型服务商。
 5. 新建全局 Chat 或选择项目工作目录。
@@ -491,9 +491,11 @@ Loom 不只想成为一个工具，也希望成为用户理解 AI Agent 的学�
 
 ## 版本
 
-当前开源基线版本：`v0.1.0`。
+当前开源基线版本：`v0.2.0`。
 
-版本说明：[docs/releases/v0.1.0.md](docs/releases/v0.1.0.md)。
+版本说明：[docs/releases/v0.2.0.md](docs/releases/v0.2.0.md)。
+
+v0.2.0 增加 Chat 图像生成、可配置的 GPT-Image2 / Nano Banana 2 / SeeDream 图像 provider、项目 Subagents / Skills / MCP 资源管理、定时任务执行增强、飞书 / Lark 通道基础能力、MP4 / 本地文件预览增强、模型与上下文窗口配置增强，并修复多项 Chat 与项目创建问题。
 
 ---
 
