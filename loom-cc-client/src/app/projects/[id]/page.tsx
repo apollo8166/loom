@@ -154,6 +154,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
   const handleCreateAndSend = useCallback(async (params: {
     message: string
     effectiveMessage?: string
+    model: string
     enabledSkills?: string[]
     permissionMode: string
     thinkingMode: string
@@ -161,8 +162,13 @@ export default function ProjectPage({ params }: ProjectPageProps) {
     planMode: boolean
   }) => {
     if (!project) return
-    const newSession = await createSession(project.defaultModel, 'New Session', {
+    const newSession = await createSession(params.model || project.defaultModel, 'New Session', {
       workspacePath: sessionDraft?.workspacePath ?? project.workspacePath ?? undefined,
+      attachedFolderPaths: sessionDraft?.attachedFolderPaths ?? [],
+      useWorktree: sessionDraft?.useWorktree ?? false,
+      permissionMode: params.permissionMode,
+      thinkingMode: params.thinkingMode,
+      planMode: params.planMode,
     })
     if (!newSession) return
     setSessionDraft(null)
@@ -176,14 +182,22 @@ export default function ProjectPage({ params }: ProjectPageProps) {
       attachments: params.attachments,
       planMode: params.planMode,
     })
-  }, [project, sessionDraft?.workspacePath, createSession])
+  }, [project, sessionDraft, createSession])
 
-  const handleCreateImageSession = useCallback(async () => {
+  const handleCreateImageSession = useCallback(async (settings?: {
+    model?: string
+    permissionMode?: string
+    thinkingMode?: string
+    planMode?: boolean
+  }) => {
     if (!project) return null
-    const newSession = await createSession(project.defaultModel, 'Image Generation', {
+    const newSession = await createSession(settings?.model || project.defaultModel, 'Image Generation', {
       workspacePath: sessionDraft?.workspacePath ?? project.workspacePath ?? undefined,
       attachedFolderPaths: sessionDraft?.attachedFolderPaths ?? [],
       useWorktree: sessionDraft?.useWorktree ?? false,
+      permissionMode: settings?.permissionMode,
+      thinkingMode: settings?.thinkingMode,
+      planMode: settings?.planMode,
     })
     if (!newSession) return null
     setSessionDraft(null)
@@ -193,10 +207,6 @@ export default function ProjectPage({ params }: ProjectPageProps) {
   const handleDeleteSession = useCallback(async (sessionId: string) => {
     await deleteSession(sessionId)
   }, [deleteSession])
-
-  const handleModelChange = useCallback((model: string) => {
-    setProject(prev => prev ? { ...prev, defaultModel: model } : null)
-  }, [])
 
   const handleRenameSession = useCallback(async (sessionId: string, title: string) => {
     await updateSession(sessionId, { title })
@@ -244,7 +254,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
             projectName={project.name}
             onPreviewChange={setChatPreviewOpen}
             onTasksChange={setSessionTasks}
-            onModelChange={handleModelChange}
+            onSessionUpdate={updateSession}
             pendingAutoSend={pendingAutoSend}
             onPendingAutoSendConsumed={() => setPendingAutoSend(null)}
             sessionDraft={sessionDraft}

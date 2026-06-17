@@ -66,11 +66,17 @@ export interface Project {
   lastOpenedAt: string | null
 }
 
+export type PermissionMode = 'confirm' | 'accept_edits' | 'full'
+export type ThinkingMode = 'off' | 'auto' | 'max'
+
 export interface Session {
   id: string
   projectId: string
   title: string
   model: string
+  permissionMode?: PermissionMode
+  thinkingMode?: ThinkingMode
+  planMode?: boolean
   runtimeSessionId: string | null
   status: 'active' | 'archived' | 'deleted'
   contextVersion: number
@@ -165,8 +171,6 @@ export type AskUserQuestionAnnotations = Record<string, { preview?: string; note
 export type ToolRawContent =
   | { type: 'text'; text: string }
   | { type: 'web_search'; results: { title: string; url: string }[] }
-
-export type ThinkingMode = 'off' | 'auto' | 'max'
 
 /** Sub-agent intermediate content block */
 export type AgentSubBlock =

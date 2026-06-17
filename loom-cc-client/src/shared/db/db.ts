@@ -9,7 +9,7 @@ declare const globalThis: {
 } & typeof global
 
 /** Schema version — bump when adding new tables/columns */
-const SCHEMA_VERSION = 17
+const SCHEMA_VERSION = 18
 
 export const GLOBAL_CHAT_PROJECT_ID = '__global_chat__'
 
@@ -46,6 +46,12 @@ function applySchema(db: Database.Database) {
       project_id            TEXT NOT NULL,
       title                 TEXT NOT NULL DEFAULT 'New Session',
       model                 TEXT NOT NULL DEFAULT 'claude-sonnet-4-6',
+      permission_mode       TEXT NOT NULL DEFAULT 'confirm'
+                              CHECK (permission_mode IN ('confirm', 'accept_edits', 'full')),
+      thinking_mode         TEXT NOT NULL DEFAULT 'auto'
+                              CHECK (thinking_mode IN ('off', 'auto', 'max')),
+      plan_mode             INTEGER NOT NULL DEFAULT 0
+                              CHECK (plan_mode IN (0, 1)),
       runtime_session_id    TEXT,
       runtime_provider_id   TEXT NOT NULL DEFAULT '',
       runtime_model_id      TEXT NOT NULL DEFAULT '',
@@ -616,6 +622,10 @@ function runIncrementalMigrations(db: Database.Database) {
   // v6: provider/model used by the current SDK runtime session
   try { db.exec(`ALTER TABLE sessions ADD COLUMN runtime_provider_id TEXT NOT NULL DEFAULT ''`) } catch { /* already exists */ }
   try { db.exec(`ALTER TABLE sessions ADD COLUMN runtime_model_id TEXT NOT NULL DEFAULT ''`) } catch { /* already exists */ }
+  // v18: per-session workbench toolbar state
+  try { db.exec(`ALTER TABLE sessions ADD COLUMN permission_mode TEXT NOT NULL DEFAULT 'confirm'`) } catch { /* already exists */ }
+  try { db.exec(`ALTER TABLE sessions ADD COLUMN thinking_mode TEXT NOT NULL DEFAULT 'auto'`) } catch { /* already exists */ }
+  try { db.exec(`ALTER TABLE sessions ADD COLUMN plan_mode INTEGER NOT NULL DEFAULT 0`) } catch { /* already exists */ }
   // v7: background memory extraction status + dedupe
   db.exec(`
     CREATE TABLE IF NOT EXISTS memory_jobs (

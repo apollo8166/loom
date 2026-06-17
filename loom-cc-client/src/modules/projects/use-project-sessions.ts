@@ -97,10 +97,19 @@ export function useProjectSessions(projectId: string | null, sessionsEndpoint?: 
 
   const activeSession = sessions.find(s => s.id === activeSessionId) ?? null
 
+  type CreateSessionOptions = {
+    workspacePath?: string
+    attachedFolderPaths?: string[]
+    useWorktree?: boolean
+    permissionMode?: string
+    thinkingMode?: string
+    planMode?: boolean
+  }
+
   const createSession = useCallback(async (
     model?: string,
     title?: string,
-    options?: string | { workspacePath?: string; attachedFolderPaths?: string[]; useWorktree?: boolean },
+    options?: string | CreateSessionOptions,
   ): Promise<Session | null> => {
     if (!projectId) return null
     try {

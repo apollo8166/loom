@@ -158,6 +158,7 @@ export default function ChatPage() {
   const handleCreateAndSend = useCallback(async (params: {
     message: string
     effectiveMessage?: string
+    model: string
     enabledSkills?: string[]
     permissionMode: string
     thinkingMode: string
@@ -165,10 +166,13 @@ export default function ChatPage() {
     planMode: boolean
   }) => {
     if (!project || !sessionDraft) return
-    const newSession = await createSession(project.defaultModel, 'New Session', {
+    const newSession = await createSession(params.model || project.defaultModel, 'New Session', {
       workspacePath: sessionDraft.workspacePath ?? undefined,
       attachedFolderPaths: sessionDraft.attachedFolderPaths,
       useWorktree: sessionDraft.useWorktree,
+      permissionMode: params.permissionMode,
+      thinkingMode: params.thinkingMode,
+      planMode: params.planMode,
     })
     if (!newSession) return
     setSessionDraft(null)
@@ -184,12 +188,20 @@ export default function ChatPage() {
     })
   }, [project, sessionDraft, createSession])
 
-  const handleCreateImageSession = useCallback(async () => {
+  const handleCreateImageSession = useCallback(async (settings?: {
+    model?: string
+    permissionMode?: string
+    thinkingMode?: string
+    planMode?: boolean
+  }) => {
     if (!project) return null
-    const newSession = await createSession(project.defaultModel, 'Image Generation', {
+    const newSession = await createSession(settings?.model || project.defaultModel, 'Image Generation', {
       workspacePath: (sessionDraft?.workspacePath ?? defaultWorkspacePath) || undefined,
       attachedFolderPaths: sessionDraft?.attachedFolderPaths ?? [],
       useWorktree: sessionDraft?.useWorktree ?? false,
+      permissionMode: settings?.permissionMode,
+      thinkingMode: settings?.thinkingMode,
+      planMode: settings?.planMode,
     })
     if (!newSession) return null
     setSessionDraft(null)
@@ -199,10 +211,6 @@ export default function ChatPage() {
   const handleRenameSession = useCallback(async (sessionId: string, title: string) => {
     await updateSession(sessionId, { title })
   }, [updateSession])
-
-  const handleModelChange = useCallback((model: string) => {
-    setProject(prev => prev ? { ...prev, defaultModel: model } : prev)
-  }, [])
 
   if (loading || !project) {
     return (
@@ -244,7 +252,7 @@ export default function ChatPage() {
         onChooseWorkspace={handleChooseWorkspace}
         onAddAttachedFolder={handleAddAttachedFolder}
         onToggleWorktree={handleToggleWorktree}
-        onModelChange={handleModelChange}
+        onSessionUpdate={updateSession}
         sessionDraft={sessionDraft}
         onCreateAndSend={handleCreateAndSend}
         onCreateImageSession={handleCreateImageSession}

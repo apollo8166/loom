@@ -33,6 +33,7 @@ import {
   parseContextWindowFallback,
   resolveContextWindowTokens,
 } from '@/shared/config/context-window'
+import type { PermissionMode } from '@/shared/types'
 
 /* ── Types ── */
 
@@ -189,6 +190,19 @@ async function loadSkillSummaryEntry(workspacePath: string | null | undefined, s
 
 const LARGE_ATTACHMENT_WARN_BYTES = 5 * 1024 * 1024
 const HUGE_ATTACHMENT_BLOCK_BYTES = 20 * 1024 * 1024
+const DEFAULT_CHAT_MODEL = 'claude-sonnet-4-6'
+const DEFAULT_PERMISSION_MODE: PermissionMode = 'confirm'
+const DEFAULT_THINKING_MODE: ThinkingMode = 'auto'
+
+function normalizePermissionMode(value: string | null | undefined): PermissionMode {
+  if (value === 'accept_edits' || value === 'full') return value
+  return DEFAULT_PERMISSION_MODE
+}
+
+function normalizeThinkingModeValue(value: string | null | undefined): ThinkingMode {
+  if (value === 'off' || value === 'max') return value
+  return DEFAULT_THINKING_MODE
+}
 
 function basename(filePath: string | null | undefined): string {
   if (!filePath) return 'Loom Chat'
@@ -435,7 +449,7 @@ interface WorkbenchViewProps {
   projectName?: string
   onPreviewChange?: (open: boolean) => void
   onTasksChange?: (tasks: Map<string, import('@/shared/types').TaskInfo>) => void
-  onModelChange?: (model: string) => void
+  onSessionUpdate?: (sessionId: string, updates: Record<string, unknown>) => Promise<boolean> | boolean
   workspacePath?: string | null
   attachedFolderPaths?: string[]
   recentWorkspacePaths?: string[]
@@ -457,16 +471,16 @@ interface WorkbenchViewProps {
   onPendingAutoSendConsumed?: () => void
   sessionDraft?: { workspacePath: string | null; attachedFolderPaths: string[]; useWorktree: boolean } | null
   onCreateAndSend?: (params: {
-    message: string; permissionMode: string; thinkingMode: string; planMode: boolean
+    message: string; model: string; permissionMode: string; thinkingMode: string; planMode: boolean
     effectiveMessage?: string
     enabledSkills?: string[]
     attachments?: RuntimeAttachmentPayload[]
   }) => void
-  onCreateImageSession?: () => Promise<Session | null>
+  onCreateImageSession?: (settings?: { model?: string; permissionMode?: string; thinkingMode?: string; planMode?: boolean }) => Promise<Session | null>
   hideWorkspaceBar?: boolean
 }
 
-export function WorkbenchView({ project, session, onNewSession, projectName, onPreviewChange, onTasksChange, onModelChange, workspacePath, attachedFolderPaths = [], recentWorkspacePaths = [], workspaceBranch, useWorktree = false, workspaceRequired = false, workspaceIsDefault = false, emptyMode = 'project', onChooseWorkspace, onAddAttachedFolder, onToggleWorktree, pendingAutoSend, onPendingAutoSendConsumed, sessionDraft, onCreateAndSend, onCreateImageSession, hideWorkspaceBar = false }: WorkbenchViewProps) {
+export function WorkbenchView({ project, session, onNewSession, projectName, onPreviewChange, onTasksChange, onSessionUpdate, workspacePath, attachedFolderPaths = [], recentWorkspacePaths = [], workspaceBranch, useWorktree = false, workspaceRequired = false, workspaceIsDefault = false, emptyMode = 'project', onChooseWorkspace, onAddAttachedFolder, onToggleWorktree, pendingAutoSend, onPendingAutoSendConsumed, sessionDraft, onCreateAndSend, onCreateImageSession, hideWorkspaceBar = false }: WorkbenchViewProps) {
   const {
     groups, messages, streaming, isThinking, error,
     isCompacting, compactingText, tasks, memoryNotice,
@@ -475,11 +489,11 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
   } = useSessionChat(session?.id ?? null)
 
   const [input, setInput] = useState('')
-  const [permissionMode, setPermissionMode] = useState('confirm')
-  const [thinkingMode, setThinkingMode] = useState<ThinkingMode>('auto')
-  const [planMode, setPlanMode] = useState(false)
+  const [permissionMode, setPermissionMode] = useState<PermissionMode>(() => normalizePermissionMode(session?.permissionMode))
+  const [thinkingMode, setThinkingMode] = useState<ThinkingMode>(() => normalizeThinkingModeValue(session?.thinkingMode))
+  const [planMode, setPlanMode] = useState(() => session?.planMode === true)
   const [selectedModel, setSelectedModel] = useState(
-    session?.model || project.defaultModel || 'claude-sonnet-4-6'
+    session?.model || project.defaultModel || DEFAULT_CHAT_MODEL
   )
   const [activeProviderId, setActiveProviderId] = useState<string>('anthropic')
   const [activeProviderConfig, setActiveProviderConfig] = useState<ProviderConfigBrief | undefined>(undefined)
@@ -561,6 +575,8 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
   const userScrolledUpRef = useRef(false)
   const prevMessageCountRef = useRef(0)
   const prevSessionIdRef = useRef<string | null>(null)
+  const restoredToolbarSessionIdRef = useRef<string | null | undefined>(undefined)
+  const pendingSessionModelRef = useRef<{ sessionId: string; model: string } | null>(null)
   const pendingInitialScrollRef = useRef(false)
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
 
@@ -645,40 +661,85 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
     })
   }, [project.id])
 
-  // Update selected model when session changes
-  useEffect(() => {
-    const sessionModel = normalizeStoredModel(session?.model || project.defaultModel, activeProviderConfig)
-    setSelectedModel(sessionModel)
-  }, [session?.model, project.defaultModel, activeProviderConfig])
-
-  // When provider catalog loads, auto-correct selectedModel if project.defaultModel
-  // is not in the current catalog (e.g. project was created with claude-sonnet-4-6
-  // but the active provider is chatgpt).  Skip when an existing session already has
-  // its own model — we don't want to silently change it.
-  useEffect(() => {
-    if (!availableModels.length) return
-    const normalizedSessionModel = session?.model ? normalizeStoredModel(session.model, activeProviderConfig) : null
-    const normalizedProjectModel = normalizeStoredModel(project.defaultModel, activeProviderConfig)
-    const best = availableModels.find(m => m.id === (normalizedSessionModel || normalizedProjectModel))
-      ?? availableModels.find(m => m.tier === 'main')
-      ?? availableModels[0]
-    if (selectedModel === best.id && project.defaultModel === best.id) return
-    setSelectedModel(best.id)
-    onModelChange?.(best.id)
-    // Persist logical tier only. The concrete provider model ID is resolved from global Settings at runtime.
-    fetch(`/api/projects/${project.id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ defaultModel: best.id }),
-    }).catch(() => {})
-    if (session?.id && session.model !== best.id) {
-      fetch(`/api/sessions/${session.id}`, {
+  const persistSessionSettings = useCallback(async (updates: Record<string, unknown>): Promise<boolean> => {
+    if (!session?.id) return false
+    try {
+      if (onSessionUpdate) {
+        return await Promise.resolve(onSessionUpdate(session.id, updates))
+      }
+      const res = await fetch(`/api/sessions/${session.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: best.id }),
-      }).catch(() => {})
+        body: JSON.stringify(updates),
+      })
+      return res.ok
+    } catch {
+      return false
     }
-  }, [availableModels, session?.id, session?.model, project.defaultModel, project.id, onModelChange, activeProviderConfig, selectedModel])
+  }, [onSessionUpdate, session?.id])
+
+  // Restore toolbar state from the active session. Draft/no-session state starts
+  // from project defaults once, then remains local until a session is created.
+  useEffect(() => {
+    const currentSessionId = session?.id ?? null
+    if (restoredToolbarSessionIdRef.current === currentSessionId) return
+    restoredToolbarSessionIdRef.current = currentSessionId
+    if (pendingSessionModelRef.current?.sessionId !== currentSessionId) {
+      pendingSessionModelRef.current = null
+    }
+
+    if (!session) {
+      setPermissionMode(DEFAULT_PERMISSION_MODE)
+      setThinkingMode(DEFAULT_THINKING_MODE)
+      setPlanMode(false)
+      setSelectedModel(normalizeStoredModel(project.defaultModel || DEFAULT_CHAT_MODEL, activeProviderConfig))
+      return
+    }
+
+    setPermissionMode(normalizePermissionMode(session.permissionMode))
+    setThinkingMode(normalizeThinkingModeValue(session.thinkingMode))
+    setPlanMode(session.planMode === true)
+    setSelectedModel(normalizeStoredModel(session.model || project.defaultModel, activeProviderConfig))
+  }, [activeProviderConfig, project.defaultModel, session])
+
+  useEffect(() => {
+    if (!session?.id) return
+    setPermissionMode(normalizePermissionMode(session.permissionMode))
+    setThinkingMode(normalizeThinkingModeValue(session.thinkingMode))
+    setPlanMode(session.planMode === true)
+  }, [session?.id, session?.permissionMode, session?.thinkingMode, session?.planMode])
+
+  useEffect(() => {
+    if (!session?.id) return
+    const pending = pendingSessionModelRef.current
+    if (pending?.sessionId === session.id) {
+      if (session.model === pending.model) {
+        pendingSessionModelRef.current = null
+      } else if (selectedModel === pending.model) {
+        return
+      }
+    }
+    setSelectedModel(normalizeStoredModel(session.model || project.defaultModel, activeProviderConfig))
+  }, [session?.id, session?.model, project.defaultModel, activeProviderConfig, selectedModel])
+
+  // When provider catalog loads, auto-correct the current logical model if the
+  // stored value is a concrete provider model or is no longer available.
+  useEffect(() => {
+    if (!availableModels.length) return
+    const pending = pendingSessionModelRef.current
+    if (session?.id && pending?.sessionId === session.id && pending.model === selectedModel && session.model !== pending.model) {
+      return
+    }
+    const storedModel = session?.id ? session.model : selectedModel || project.defaultModel
+    const normalizedModel = normalizeStoredModel(storedModel || project.defaultModel, activeProviderConfig)
+    const best = availableModels.find(m => m.id === normalizedModel)
+      ?? availableModels.find(m => m.tier === 'main')
+      ?? availableModels[0]
+    if (selectedModel !== best.id) setSelectedModel(best.id)
+    if (session?.id && session.model !== best.id) {
+      void persistSessionSettings({ model: best.id })
+    }
+  }, [availableModels, session?.id, session?.model, project.defaultModel, activeProviderConfig, selectedModel, persistSessionSettings])
 
   const updateScrollAffordance = useCallback((container = messagesContainerRef.current) => {
     if (!container) return
@@ -909,6 +970,33 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
     setNotification(text)
     notifTimerRef.current = setTimeout(() => setNotification(null), 6000)
   }, [])
+
+  const handlePermissionModeChange = useCallback((mode: PermissionMode, nextPlanMode: boolean) => {
+    setPermissionMode(mode)
+    setPlanMode(nextPlanMode)
+    void persistSessionSettings({ permissionMode: mode, planMode: nextPlanMode })
+  }, [persistSessionSettings])
+
+  const handleThinkingModeChange = useCallback((mode: ThinkingMode) => {
+    setThinkingMode(mode)
+    void persistSessionSettings({ thinkingMode: mode })
+  }, [persistSessionSettings])
+
+  const handleModelChange = useCallback((modelId: string) => {
+    setSelectedModel(modelId)
+    setModelOpen(false)
+    const sessionId = session?.id
+    if (sessionId && modelId !== session.model) {
+      pendingSessionModelRef.current = { sessionId, model: modelId }
+      void persistSessionSettings({ model: modelId }).then(ok => {
+        const pending = pendingSessionModelRef.current
+        if (!pending || pending.sessionId !== sessionId || pending.model !== modelId) return
+        if (ok) return
+        pendingSessionModelRef.current = null
+        setSelectedModel(normalizeStoredModel(session.model || project.defaultModel, activeProviderConfig))
+      })
+    }
+  }, [activeProviderConfig, persistSessionSettings, project.defaultModel, session?.id, session?.model])
 
   useEffect(() => {
     setAttachmentOverrideSignature(null)
@@ -1312,7 +1400,7 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
       return
     }
     if (cmd.name === '/model') {
-      if (args) setSelectedModel(args.trim())
+      if (args) handleModelChange(args.trim())
       else setModelOpen(true)
       return
     }
@@ -1372,6 +1460,7 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
         onCreateAndSend({
           message: '/init — 请开始工作区配置面试，每次只问一个问题。',
           effectiveMessage: initMessage,
+          model: selectedModel,
           permissionMode,
           thinkingMode,
           planMode,
@@ -1467,6 +1556,7 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
       onCreateAndSend({
         message: content,
         effectiveMessage: effectiveContent,
+        model: selectedModel,
         enabledSkills,
         permissionMode,
         thinkingMode,
@@ -1477,30 +1567,7 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
     }
     sendMessage(effectiveContent, permissionMode, thinkingMode, undefined, planMode, content, false, enabledSkills)
     scrollToBottom('smooth')
-  }, [clearMessages, stopStreaming, compact, handleExport, sendMessage, permissionMode, thinkingMode, planMode, allCmds, messages, groups, activeMessages, showNotification, project.id, effectiveWorkspacePath, missingWorkspace, session, sessionDraft, canCreateFromEmptyProject, onCreateAndSend, scrollToBottom])
-
-  // Handle model change — updates session + project defaultModel in DB and notifies parent
-  const handleModelChange = useCallback(async (modelId: string) => {
-    setSelectedModel(modelId)
-    setModelOpen(false)
-    // Update session model
-    if (session?.id && modelId !== session.model) {
-      fetch(`/api/sessions/${session.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: modelId }),
-      }).catch(() => {})
-    }
-    // Persist as project default so new sessions inherit this model
-    if (modelId !== project.defaultModel) {
-      fetch(`/api/projects/${project.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ defaultModel: modelId }),
-      }).catch(() => {})
-      onModelChange?.(modelId)
-    }
-  }, [session?.id, session?.model, project.id, project.defaultModel, onModelChange])
+  }, [clearMessages, stopStreaming, compact, handleExport, sendMessage, permissionMode, thinkingMode, planMode, allCmds, messages, groups, activeMessages, showNotification, project.id, effectiveWorkspacePath, missingWorkspace, session, sessionDraft, canCreateFromEmptyProject, onCreateAndSend, scrollToBottom, selectedModel, handleModelChange])
 
   const submitImageGeneration = useCallback(async (rawPrompt?: string): Promise<boolean> => {
     const prompt = (rawPrompt ?? input).trim()
@@ -1514,7 +1581,7 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
 
     let sessionId = session?.id ?? ''
     if (!sessionId) {
-      const created = await onCreateImageSession?.()
+      const created = await onCreateImageSession?.({ model: selectedModel, permissionMode, thinkingMode, planMode })
       sessionId = created?.id ?? ''
     }
     if (!sessionId) {
@@ -1587,7 +1654,7 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
     } finally {
       setImageGenSubmitting(false)
     }
-  }, [imageGenSubmitting, input, onCreateImageSession, scrollToBottom, session?.id, showNotification])
+  }, [imageGenSubmitting, input, onCreateImageSession, permissionMode, planMode, scrollToBottom, selectedModel, session?.id, showNotification, thinkingMode])
 
   // Handle send — image gen logic inlined with ref reads to avoid stale closures
   const handleSend = useCallback(() => {
@@ -1663,6 +1730,7 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
                 message: content,
                 effectiveMessage: effectiveContent,
                 enabledSkills: [skillName],
+                model: selectedModel,
                 permissionMode,
                 thinkingMode,
                 attachments: attachmentData,
@@ -1679,7 +1747,7 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
             return
           }
           if (!session && (sessionDraft || canCreateFromEmptyProject) && onCreateAndSend) {
-            onCreateAndSend({ message: content, permissionMode, thinkingMode, attachments: attachmentData, planMode })
+            onCreateAndSend({ message: content, model: selectedModel, permissionMode, thinkingMode, attachments: attachmentData, planMode })
             setInput('')
             setAttachments([])
             return
@@ -1691,7 +1759,7 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
         })
         .catch(() => {
           if (!session && (sessionDraft || canCreateFromEmptyProject) && onCreateAndSend) {
-            onCreateAndSend({ message: content, permissionMode, thinkingMode, attachments: attachmentData, planMode })
+            onCreateAndSend({ message: content, model: selectedModel, permissionMode, thinkingMode, attachments: attachmentData, planMode })
             setInput('')
             setAttachments([])
             return
@@ -1727,7 +1795,7 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
 
     // Empty project / draft mode: create the first session only when the user sends.
     if (!session && (sessionDraft || canCreateFromEmptyProject) && onCreateAndSend) {
-      onCreateAndSend({ message: content, permissionMode, thinkingMode, attachments: attachmentData, planMode })
+      onCreateAndSend({ message: content, model: selectedModel, permissionMode, thinkingMode, attachments: attachmentData, planMode })
       setInput('')
       setAttachments([])
       return
@@ -1738,7 +1806,7 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
     setInput('')
     setAttachments([])
     scrollToBottom('smooth')
-  }, [input, attachments, streaming, allCmds, execCommand, sendMessage, permissionMode, thinkingMode, planMode, getPlaceholder, missingWorkspace, showNotification, session, sessionDraft, canCreateFromEmptyProject, onCreateAndSend, attachmentOverrideSignature, project.id, scrollToBottom, submitImageGeneration])
+  }, [input, attachments, streaming, allCmds, execCommand, sendMessage, permissionMode, thinkingMode, planMode, getPlaceholder, missingWorkspace, showNotification, session, sessionDraft, canCreateFromEmptyProject, onCreateAndSend, attachmentOverrideSignature, project.id, scrollToBottom, submitImageGeneration, selectedModel])
 
   const handleInputChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     inputHistoryIndexRef.current = null
@@ -3052,8 +3120,8 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
                           <button
                             key={p.value}
                             onClick={() => {
-                              if (p.value === 'plan') { setPlanMode(true) }
-                              else { setPlanMode(false); setPermissionMode(p.value) }
+                              if (p.value === 'plan') handlePermissionModeChange(permissionMode, true)
+                              else handlePermissionModeChange(p.value as PermissionMode, false)
                               setPermOpen(false)
                             }}
                             style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '7px 10px', borderRadius: 7, background: active ? 'rgba(245,158,11,0.12)' : 'transparent', border: 'none', cursor: 'pointer' }}
@@ -3171,7 +3239,7 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
                         return (
                           <button
                             key={t.value}
-                            onClick={() => { setThinkingMode(t.value as ThinkingMode); setThinkOpen(false) }}
+                            onClick={() => { handleThinkingModeChange(t.value as ThinkingMode); setThinkOpen(false) }}
                             style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '7px 10px', borderRadius: 7, background: active ? 'rgba(245,158,11,0.12)' : 'transparent', border: 'none', cursor: 'pointer' }}
                             onMouseEnter={e => { if (!active) (e.currentTarget as HTMLElement).style.background = 'var(--theme-bg-hover)' }}
                             onMouseLeave={e => { if (!active) (e.currentTarget as HTMLElement).style.background = 'transparent' }}
