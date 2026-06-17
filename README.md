@@ -132,8 +132,8 @@ This direction can evolve toward a local Agent platform with an extensible ecosy
 
 1. Open [Releases](https://github.com/apollo8166/loom/releases/latest).
 2. Download the package for your device:
-   - `loom-cc-v0.2.2-mac-arm64.dmg`: Apple Silicon / M-series Macs.
-   - `loom-cc-v0.2.2-mac-x64.dmg`: Intel Macs.
+   - `loom-cc-v0.2.3-mac-arm64.dmg`: Apple Silicon / M-series Macs.
+   - `loom-cc-v0.2.3-mac-x64.dmg`: Intel Macs.
 3. Install and open Loom.
 4. Configure model providers in Settings.
 5. Start a global chat or choose a project working directory.
@@ -493,11 +493,11 @@ For everyday users, this is easier to understand than starting directly with ter
 
 ## Version
 
-Current open-source baseline: `v0.2.2`.
+Current open-source baseline: `v0.2.3`.
 
-Release notes: [docs/releases/v0.2.2.md](docs/releases/v0.2.2.md).
+Release notes: [docs/releases/v0.2.3.md](docs/releases/v0.2.3.md).
 
-v0.2.2 tightens attachment handling, especially for PDFs, by extracting readable text when possible, rejecting unreadable PDFs before chat submission, and keeping the Chat runtime from treating uploaded attachments like workspace files.
+v0.2.3 keeps the image generation entry visible by default and guides users to Settings only when an image prompt is submitted without a configured provider or API key.
 
 ---
 

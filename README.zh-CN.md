@@ -132,8 +132,8 @@ Loom 未来会支持更完整的插件系统。插件可以内置或扩展运行
 
 1. 打开 [Releases](https://github.com/apollo8166/loom/releases/latest)。
 2. 根据设备下载对应安装包：
-   - `loom-cc-v0.2.2-mac-arm64.dmg`：Apple Silicon / M 系列 Mac。
-   - `loom-cc-v0.2.2-mac-x64.dmg`：Intel Mac。
+   - `loom-cc-v0.2.3-mac-arm64.dmg`：Apple Silicon / M 系列 Mac。
+   - `loom-cc-v0.2.3-mac-x64.dmg`：Intel Mac。
 3. 安装并打开 Loom。
 4. 在设置中配置模型服务商。
 5. 新建全局 Chat 或选择项目工作目录。
@@ -491,11 +491,11 @@ Loom 不只想成为一个工具，也希望成为用户理解 AI Agent 的学�
 
 ## 版本
 
-当前开源基线版本：`v0.2.2`。
+当前开源基线版本：`v0.2.3`。
 
-版本说明：[docs/releases/v0.2.2.md](docs/releases/v0.2.2.md)。
+版本说明：[docs/releases/v0.2.3.md](docs/releases/v0.2.3.md)。
 
-v0.2.2 强化了附件处理，尤其是 PDF：能提取可读文字时就直接注入上下文，无法读取时会在发送前明确拦截，避免把上传附件当成工作区文件继续处理。
+v0.2.3 默认展示图像生成入口，并在用户提交生图请求但尚未配置 provider 或 API Key 时，引导前往 Settings 完成配置。
 
 ---
 

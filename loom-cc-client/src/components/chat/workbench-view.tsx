@@ -18,7 +18,7 @@ import {
 import { FilePreviewPanel, type PreviewFile } from '@/components/chat/file-preview-panel'
 import { ImageGenToolbar, type ImageGenSettings } from '@/components/chat/image-gen-toolbar'
 import { ImageJobCard, useImageJobPoller } from '@/components/chat/image-job-card'
-import { IMAGE_STYLE_PRESETS, type ImageGenerationConfig } from '@/shared/config/image-generation-config'
+import { DEFAULT_IMAGE_GENERATION_CONFIG, IMAGE_STYLE_PRESETS, type ImageGenerationConfig } from '@/shared/config/image-generation-config'
 import type { ImageGenHistoryItem } from '@/shared/image-generation/job-executor'
 import type { ImageGenerationJob, StoredReferenceImage } from '@/shared/image-generation/job-store'
 import { ClaudeCodeUsageStats } from '@/components/chat/claude-code-usage-stats'
@@ -514,7 +514,7 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
 
   // Image generation mode
   const [imageGenMode, setImageGenMode] = useState(false)
-  const [imageGenConfig, setImageGenConfig] = useState<ImageGenerationConfig | null>(null)
+  const [imageGenConfig, setImageGenConfig] = useState<ImageGenerationConfig>(DEFAULT_IMAGE_GENERATION_CONFIG)
   const [imageGenSettings, setImageGenSettings] = useState<ImageGenSettings>({
     providerId: '',
     aspectRatioId: '1:1',
@@ -527,7 +527,7 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
 
   // Refs for always-fresh values inside handleSend (avoids stale closure)
   const imageGenModeRef = useRef(false)
-  const imageGenConfigRef = useRef<ImageGenerationConfig | null>(null)
+  const imageGenConfigRef = useRef<ImageGenerationConfig>(DEFAULT_IMAGE_GENERATION_CONFIG)
   const imageGenSettingsRef = useRef<ImageGenSettings>({ providerId: '', aspectRatioId: '1:1', styleId: 'none', referenceImages: [] })
   const imageGenJobsRef = useRef<ImageGenJobEntryState[]>([])
 
@@ -580,8 +580,7 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
       .then(r => r.json())
       .then((cfg: ImageGenerationConfig) => {
         setImageGenConfig(cfg)
-        if (cfg.enabled && cfg.configs.length > 0) {
-          const active = cfg.configs.find(c => c.id === cfg.activeProviderId)
+        if (cfg.configs.length > 0) {
           setImageGenSettings(prev => ({
             ...prev,
             providerId: prev.providerId || cfg.activeProviderId,
@@ -1508,8 +1507,8 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
     if (!prompt || imageGenSubmitting) return false
 
     const cfg = imageGenConfigRef.current
-    if (!cfg?.enabled) {
-      showNotification('图像生成未启用，请先在设置中开启')
+    if (!cfg.enabled || cfg.configs.length === 0) {
+      showNotification('请先到设置中完成图像生成配置')
       return false
     }
 
@@ -1524,6 +1523,11 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
     }
 
     const settings = imageGenSettingsRef.current
+    const providerConfig = cfg.configs.find(c => c.id === (settings.providerId || cfg.activeProviderId))
+    if (!providerConfig?.apiKey?.trim()) {
+      showNotification(`请先到设置中配置 ${providerConfig?.name ?? '图像生成服务商'} 的 API Key`)
+      return false
+    }
     const referenceImages = settings.referenceImages.map(r => ({
       name: r.name,
       url: r.url,
@@ -1811,7 +1815,7 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
   const hasMessages = messages.length > 0
   const canUseImageComposer = Boolean(session?.id || sessionDraft || canCreateFromEmptyProject || onCreateImageSession)
   const imagePromptReady = input.trim().length > 0
-  const canSubmitImagePrompt = Boolean(imageGenConfig?.enabled && canUseImageComposer && imagePromptReady && !imageGenSubmitting)
+  const canSubmitImagePrompt = Boolean(canUseImageComposer && imagePromptReady && !imageGenSubmitting)
   const timelineItems = useMemo(() => {
     const items: Array<
       | { type: 'message'; key: string; sortAt: number; order: number; groupIndex: number; messageIndex: number; message: NonNullable<typeof groups[number]['messages'][number]> }
@@ -2980,7 +2984,7 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
             {/* Toolbar */}
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 12px', height: 44 }}>
               {/* Image gen mode toolbar (replaces left section) */}
-              {imageGenMode && imageGenConfig ? (
+              {imageGenMode ? (
                 <ImageGenToolbar
                   config={imageGenConfig}
                   settings={imageGenSettings}
@@ -3067,34 +3071,32 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
                 </div>
 
                 {/* Image generation entry button */}
-                {imageGenConfig?.enabled && (
-                  <>
-                    <div style={{ width: 1, height: 18, background: 'rgba(255,255,255,0.1)', margin: '0 2px' }} />
-                    <button
-                      onClick={() => setImageGenMode(true)}
-                      disabled={!canUseImageComposer}
-                      title="图像生成"
-                      style={{
-                        display: 'flex', alignItems: 'center', gap: 5, height: 32,
-                        border: '1px solid rgba(255,255,255,0.1)',
-                        borderRadius: 7, padding: '0 10px',
-                        background: 'transparent',
-                        color: 'var(--color-text-muted)',
-                        cursor: canUseImageComposer ? 'pointer' : 'default',
-                        fontSize: 12, whiteSpace: 'nowrap',
-                      }}
-                      onMouseEnter={e => { if (canUseImageComposer) (e.currentTarget as HTMLElement).style.background = 'var(--theme-bg-hover)' }}
-                      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}
-                    >
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                        <circle cx="8.5" cy="8.5" r="1.5" />
-                        <polyline points="21 15 16 10 5 21" />
-                      </svg>
-                      <span>图像生成</span>
-                    </button>
-                  </>
-                )}
+                <>
+                  <div style={{ width: 1, height: 18, background: 'rgba(255,255,255,0.1)', margin: '0 2px' }} />
+                  <button
+                    onClick={() => setImageGenMode(true)}
+                    disabled={!canUseImageComposer}
+                    title="图像生成"
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 5, height: 32,
+                      border: '1px solid rgba(255,255,255,0.1)',
+                      borderRadius: 7, padding: '0 10px',
+                      background: 'transparent',
+                      color: 'var(--color-text-muted)',
+                      cursor: canUseImageComposer ? 'pointer' : 'default',
+                      fontSize: 12, whiteSpace: 'nowrap',
+                    }}
+                    onMouseEnter={e => { if (canUseImageComposer) (e.currentTarget as HTMLElement).style.background = 'var(--theme-bg-hover)' }}
+                    onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}
+                  >
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                      <circle cx="8.5" cy="8.5" r="1.5" />
+                      <polyline points="21 15 16 10 5 21" />
+                    </svg>
+                    <span>图像生成</span>
+                  </button>
+                </>
               </div>
               )}
 

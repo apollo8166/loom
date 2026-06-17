@@ -4,6 +4,13 @@ All notable changes to Loom will be documented in this file.
 
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.2.3] - 2026-06-17
+
+### Changed
+
+- The image generation entry is now always visible in the Chat / Workbench toolbar.
+- Image generation configuration is now checked when the user submits an image prompt, with direct guidance to complete Settings if no provider or API key is configured.
+
 ## [0.2.2] - 2026-06-17
 
 ### Added

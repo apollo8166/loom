@@ -107,7 +107,7 @@ export async function POST(req: NextRequest) {
     const imageConfig = getImageGenerationConfig(db)
 
     if (!imageConfig.enabled) {
-      return NextResponse.json({ error: '图像生成未启用，请先在设置中开启' }, { status: 400 })
+      return NextResponse.json({ error: '请先到设置中完成图像生成配置' }, { status: 400 })
     }
 
     const effectiveProviderId = providerId && imageConfig.configs.some(c => c.id === providerId)
