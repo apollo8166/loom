@@ -4,8 +4,7 @@ import { useTransition, useEffect, useState } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import { Loader2, MessageSquare, Layers, Zap, Store, Trash2, Settings, FolderOpen } from 'lucide-react'
 import type { Project } from '@/shared/types'
-
-const APP_VERSION = 'v1.1.0'
+import { APP_VERSION } from '@/brand/version'
 
 const NAV_ITEMS = [
   { id: 'chat',        label: '对话',        href: '/chat',        Icon: MessageSquare },

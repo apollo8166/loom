@@ -132,13 +132,13 @@ This direction can evolve toward a local Agent platform with an extensible ecosy
 
 1. Open [Releases](https://github.com/apollo8166/loom/releases/latest).
 2. Download the package for your device:
-   - `loom-cc-v0.2.0-mac-arm64.dmg`: Apple Silicon / M-series Macs.
-   - `loom-cc-v0.2.0-mac-x64.dmg`: Intel Macs.
+   - `loom-cc-v0.2.2-mac-arm64.dmg`: Apple Silicon / M-series Macs.
+   - `loom-cc-v0.2.2-mac-x64.dmg`: Intel Macs.
 3. Install and open Loom.
 4. Configure model providers in Settings.
 5. Start a global chat or choose a project working directory.
 
-> Current macOS builds are not signed with Developer ID and are not notarized. On first launch, you may need to allow the app manually in macOS security settings.
+> Current macOS builds are Developer ID signed, notarized, stapled, and verified with Gatekeeper before release.
 
 Packaged macOS apps bundle a matching Node.js v22 runtime and Claude CLI binary for the target architecture, so users do not need a system `node` install to launch the app. Release artifacts do not include local databases, provider credentials, or user settings. Those are created per user under the app data directory after first launch.
 
@@ -493,11 +493,11 @@ For everyday users, this is easier to understand than starting directly with ter
 
 ## Version
 
-Current open-source baseline: `v0.2.0`.
+Current open-source baseline: `v0.2.2`.
 
-Release notes: [docs/releases/v0.2.0.md](docs/releases/v0.2.0.md).
+Release notes: [docs/releases/v0.2.2.md](docs/releases/v0.2.2.md).
 
-v0.2.0 adds Chat image generation, configurable GPT-Image2 / Nano Banana 2 / SeeDream image providers, project resource management for Subagents / Skills / MCP, enhanced scheduled-task execution, Feishu / Lark channel foundations, MP4 / local file preview improvements, stronger model and context-window settings, and multiple Chat / project creation fixes.
+v0.2.2 tightens attachment handling, especially for PDFs, by extracting readable text when possible, rejecting unreadable PDFs before chat submission, and keeping the Chat runtime from treating uploaded attachments like workspace files.
 
 ---
 

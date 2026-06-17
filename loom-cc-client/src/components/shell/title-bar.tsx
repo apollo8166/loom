@@ -8,8 +8,7 @@ import {
 } from 'lucide-react'
 import { useTheme } from '@/shared/lib/theme-provider'
 import { BRAND } from '@/brand/config'
-
-const APP_VERSION = 'v1.1.0'
+import { APP_VERSION } from '@/brand/version'
 
 const THEME_OPTIONS = [
   { value: 'light' as const, label: '浅色', Icon: Sun },
@@ -468,11 +467,11 @@ export function TitleBar() {
                     <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>Current</span>
                   </div>
                   <ul style={{ display: 'flex', flexDirection: 'column', gap: 9, margin: 0, paddingLeft: 18, color: 'var(--color-text-secondary)', fontSize: 12, lineHeight: 1.6 }}>
-                    <li>新增 Capture Area 区域截图和快捷键设置。</li>
-                    <li>优化项目无 session 状态：保留统计页，底部可直接输入并创建首个 session。</li>
-                    <li>重构桌面端主布局：Header、左侧菜单、二级菜单和 Chat 区域改为 panel 分区。</li>
-                    <li>调整浅色主题为白色主导、冷灰背景的简洁科技风格。</li>
-                    <li>收敛右上角入口，仅保留使用说明和主题切换。</li>
+                    <li>Agent 可通过 Loom 图像生成工具自动发起文生图 / 图生图，并统一渲染为 ImageJobCard。</li>
+                    <li>修复图像工具结果解析，确保 jobId 能从 MCP text result 中恢复并显示完整任务卡片。</li>
+                    <li>Markdown 图片支持点击预览，生成图链接不再只能打开原始 URL。</li>
+                    <li>全局 Chat 和项目 Chat 输入区支持直接拖入文件上传。</li>
+                    <li>macOS DMG 发布包完成 Developer ID 签名、notarization 和 Gatekeeper 验证。</li>
                   </ul>
                 </div>
               )}

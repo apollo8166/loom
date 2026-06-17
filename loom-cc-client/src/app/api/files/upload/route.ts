@@ -113,6 +113,44 @@ async function extractPresentation(filePath: string): Promise<string> {
   return ast.toText()
 }
 
+async function extractPdf(filePath: string): Promise<string> {
+  const officeparser = await import('officeparser')
+  const ast = await officeparser.parseOffice(filePath, {
+    extractAttachments: false,
+    ocr: false,
+    outputErrorToConsole: false,
+  })
+  const officeText = ast.toText()
+  if (officeText.trim().length > 0) return officeText
+
+  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
+  const data = new Uint8Array(await fsReadFile(filePath))
+  const doc = await pdfjs.getDocument({
+    data,
+    useWorkerFetch: false,
+    isEvalSupported: false,
+    disableFontFace: true,
+  }).promise
+  const pages: string[] = []
+  try {
+    for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber += 1) {
+      const page = await doc.getPage(pageNumber)
+      const textContent = await page.getTextContent()
+      const text = textContent.items
+        .map(item => ('str' in item ? item.str : ''))
+        .filter(Boolean)
+        .join(' ')
+        .replace(/[ \t]+/g, ' ')
+        .trim()
+      if (text) pages.push(`[Page ${pageNumber}]\n${text}`)
+      page.cleanup()
+    }
+  } finally {
+    await doc.destroy()
+  }
+  return pages.join('\n\n')
+}
+
 // POST /api/files/upload — upload a file attachment
 export async function POST(req: NextRequest) {
   const UPLOAD_DIR = ensureUploadsDir()
@@ -155,6 +193,98 @@ export async function POST(req: NextRequest) {
   const isImage = mimeType.startsWith('image/') && !extLower.endsWith('.svg')
   const isPdf = mimeType === 'application/pdf' || extLower === '.pdf'
   const isText = mimeType.startsWith('text/') || TEXT_EXTENSIONS.has(extLower)
+
+  // ── PDF text extraction ─────────────────────────────────────────────
+  // Prefer text injection for model reliability. The original PDF is kept
+  // for preview/download through originalFilename.
+  if (isPdf) {
+    try {
+      const extractedText = await extractPdf(filePath)
+      if (extractedText.trim().length > 0) {
+        const extractedFilename = `${id}_extracted.txt`
+        const extractedPath = path.join(UPLOAD_DIR, extractedFilename)
+        await writeFile(extractedPath, extractedText, 'utf-8')
+        const extractedSize = Buffer.byteLength(extractedText, 'utf-8')
+
+        logger.info('files.upload.done', {
+          name: file.name,
+          filename: extractedFilename,
+          originalFilename: filename,
+          size: extractedSize,
+          extractedChars: extractedText.length,
+          originalSize: file.size,
+          mimeType,
+          tier: 'text',
+          extracted: true,
+          extractedFrom: 'pdf',
+        })
+
+        return NextResponse.json({
+          id,
+          filename: extractedFilename,
+          originalFilename: filename,
+          displayFilename: filename,
+          originalName: file.name,
+          size: extractedSize,
+          originalSize: file.size,
+          mimeType: 'text/plain',
+          originalMimeType: 'application/pdf',
+          displayMimeType: 'application/pdf',
+          isImage: false,
+          isPdf: true,
+          isText: true,
+          tier: 'text' as const,
+          path: `/api/files/serve/${extractedFilename}`,
+          originalPath: `/api/files/serve/${filename}`,
+        })
+      }
+
+      logger.warn('files.upload.pdf_extract_empty', {
+        name: file.name,
+        filename,
+        size: file.size,
+        mimeType,
+      })
+      return NextResponse.json({
+        id,
+        filename,
+        originalName: file.name,
+        size: file.size,
+        mimeType: 'application/pdf',
+        isImage: false,
+        isPdf: true,
+        isText: false,
+        tier: 'pdf' as const,
+        readable: false,
+        extractError: 'pdf_text_empty',
+        message: '未能从该 PDF 中提取可读文字。它可能是扫描版/图片型 PDF；当前聊天附件暂不支持 OCR。',
+        path: `/api/files/serve/${filename}`,
+      })
+    } catch (err) {
+      logger.warn('files.upload.pdf_extract_failed', {
+        name: file.name,
+        filename,
+        size: file.size,
+        mimeType,
+        error: err instanceof Error ? err.message : String(err),
+      })
+      return NextResponse.json({
+        id,
+        filename,
+        originalName: file.name,
+        size: file.size,
+        mimeType: 'application/pdf',
+        isImage: false,
+        isPdf: true,
+        isText: false,
+        tier: 'pdf' as const,
+        readable: false,
+        extractError: 'pdf_extract_failed',
+        message: 'PDF 文本解析失败。当前聊天附件无法读取该 PDF 内容，请改用可复制文字的 PDF 或先转成文本。',
+        path: `/api/files/serve/${filename}`,
+      })
+    }
+  }
 
   // ── Office file extraction ──────────────────────────────────────────
   const isOffice = OFFICE_MIME_TYPES.has(mimeType) || OFFICE_EXTENSIONS.has(extLower)
@@ -201,8 +331,8 @@ export async function POST(req: NextRequest) {
           isPdf: false,
           isText: true,
           tier: 'text' as const,
-          path: `/api/files/upload/${extractedFilename}`,
-          originalPath: `/api/files/upload/${filename}`,
+          path: `/api/files/serve/${extractedFilename}`,
+          originalPath: `/api/files/serve/${filename}`,
         })
       } catch {
         logger.warn('files.upload.office_extract_failed', {
@@ -239,6 +369,6 @@ export async function POST(req: NextRequest) {
     isPdf,
     isText,
     tier,
-    path: `/api/files/upload/${filename}`,
+    path: `/api/files/serve/${filename}`,
   })
 }

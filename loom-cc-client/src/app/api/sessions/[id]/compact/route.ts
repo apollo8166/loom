@@ -64,6 +64,7 @@ async function runSdkCompact(params: {
   const q = createLoomQuery({
     prompt: '/compact',
     sessionId: params.runtimeSessionId,
+    loomSessionId: params.sessionId,
     model: params.model,
     resumeSession: true,
     bypassPermissions: true,

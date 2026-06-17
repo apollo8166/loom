@@ -22,7 +22,7 @@ export async function POST(req: NextRequest) {
     resumeSession?: boolean
     compactSummaryChars?: number
     attachmentCount?: number
-    attachments?: Array<{ name: string; size?: number; tier?: string; mimeType?: string }>
+    attachments?: Array<{ name: string; size?: number; tier?: string; mimeType?: string; displayMimeType?: string }>
   }
   const message = body.message || ''
   const memoryContext = buildLoomMemoryContext({
@@ -43,7 +43,8 @@ export async function POST(req: NextRequest) {
   const attachedFolderPaths = body.attachedFolderPaths || []
   const attachments = body.attachments || []
   const riskyAttachmentCount = attachments.filter(attachment =>
-    (attachment.size || 0) >= 5 * 1024 * 1024 || attachment.tier === 'pdf'
+    (attachment.size || 0) >= 5 * 1024 * 1024 ||
+    attachment.tier === 'pdf'
   ).length
   const preview: ContextBudgetSnapshot = {
     traceId: `preview_${Date.now()}`,
@@ -108,7 +109,7 @@ export async function POST(req: NextRequest) {
         metadata: {
           attachments: attachments.slice(0, 12),
           riskyAttachmentCount,
-          note: '图片/PDF/文本文件的具体处理取决于类型和 SDK 处理路径。',
+          note: '图片会作为多模态内容发送；可抽取文本的 PDF/Office/文本文件会优先注入文本，原文件保留用于预览。',
         },
       },
       {

@@ -9,7 +9,7 @@ declare const globalThis: {
 } & typeof global
 
 /** Schema version — bump when adding new tables/columns */
-const SCHEMA_VERSION = 16
+const SCHEMA_VERSION = 17
 
 export const GLOBAL_CHAT_PROJECT_ID = '__global_chat__'
 
@@ -575,6 +575,8 @@ function applySchema(db: Database.Database) {
       session_id      TEXT NOT NULL,
       status          TEXT NOT NULL DEFAULT 'pending'
                         CHECK (status IN ('pending', 'merging', 'submitting', 'waiting', 'success', 'error')),
+      origin          TEXT NOT NULL DEFAULT 'manual'
+                        CHECK (origin IN ('manual', 'agent-tool')),
       provider_id     TEXT NOT NULL DEFAULT '',
       model           TEXT NOT NULL DEFAULT '',
       prompt          TEXT NOT NULL DEFAULT '',
@@ -1010,6 +1012,8 @@ function runIncrementalMigrations(db: Database.Database) {
       session_id      TEXT NOT NULL,
       status          TEXT NOT NULL DEFAULT 'pending'
                         CHECK (status IN ('pending', 'merging', 'submitting', 'waiting', 'success', 'error')),
+      origin          TEXT NOT NULL DEFAULT 'manual'
+                        CHECK (origin IN ('manual', 'agent-tool')),
       provider_id     TEXT NOT NULL DEFAULT '',
       model           TEXT NOT NULL DEFAULT '',
       prompt          TEXT NOT NULL DEFAULT '',
@@ -1029,7 +1033,26 @@ function runIncrementalMigrations(db: Database.Database) {
       ON image_generation_jobs(session_id, started_at DESC);
   `)
   try { db.exec(`ALTER TABLE image_generation_jobs ADD COLUMN reference_images TEXT NOT NULL DEFAULT '[]'`) } catch { /* already exists */ }
+  try { db.exec(`ALTER TABLE image_generation_jobs ADD COLUMN origin TEXT NOT NULL DEFAULT 'manual' CHECK (origin IN ('manual', 'agent-tool'))`) } catch { /* already exists */ }
+  markExistingAgentImageJobs(db)
   db.pragma(`user_version = ${SCHEMA_VERSION}`)
+}
+
+function markExistingAgentImageJobs(db: Database.Database) {
+  try {
+    const rows = db.prepare(`
+      SELECT content FROM messages
+      WHERE role = 'assistant'
+        AND content LIKE '%generate_image%'
+        AND (content LIKE '%loom_image%' OR content LIKE '%loom_image_generation_result%' OR content LIKE '%任务 ID%')
+    `).all() as Array<{ content: string }>
+    const update = db.prepare(`UPDATE image_generation_jobs SET origin = 'agent-tool' WHERE id = ?`)
+    const jobIdPattern = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
+    for (const row of rows) {
+      const ids = row.content.match(jobIdPattern) ?? []
+      for (const id of ids) update.run(id)
+    }
+  } catch { /* best effort */ }
 }
 
 function migrateLegacySessionWorkspaceArrays(db: Database.Database) {

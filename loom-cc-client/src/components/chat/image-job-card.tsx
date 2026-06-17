@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { Download, Edit2, RotateCcw, ZoomIn } from 'lucide-react'
-import { isGptImage2Model } from '@/shared/config/image-generation-config'
+import { IMAGE_PROVIDER_PRESETS, isGptImage2Model } from '@/shared/config/image-generation-config'
 import type { ImageGenerationJob, ImageJobStatus } from '@/shared/image-generation/job-store'
 
 interface ImageJobCardProps {
@@ -37,6 +37,10 @@ function getStatusDesc(job: ImageGenerationJob): string {
     return 'GPT-Image2 质量相对较高，出图时间较长，通常需要约 180 秒。'
   }
   return STATUS_DESC[job.status] ?? '正在生成图像...'
+}
+
+function providerLabel(providerId: string): string {
+  return IMAGE_PROVIDER_PRESETS[providerId as keyof typeof IMAGE_PROVIDER_PRESETS]?.name || providerId
 }
 
 function ElapsedTimer({ startedAt }: { startedAt: string }) {
@@ -263,6 +267,7 @@ export function ImageJobCard({ job, onRetry, onEditFromImage, onDownload }: Imag
           {/* Metadata bar */}
           <p style={{ fontSize: 11, color: 'var(--color-text-muted)', marginTop: 10, lineHeight: 1.7, borderTop: '1px solid var(--theme-border)', paddingTop: 8 }}>
             {[
+              job.providerId ? `服务商：${providerLabel(job.providerId)}` : null,
               meta.model ? `模型：${meta.model}` : null,
               meta.size ? `尺寸：${meta.size}` : null,
               meta.format ? `格式：${meta.format}` : null,

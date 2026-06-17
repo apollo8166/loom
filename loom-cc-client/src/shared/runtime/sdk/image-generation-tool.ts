@@ -3,18 +3,25 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod/v4'
-import { getImageGenerationConfig } from '@/shared/config/image-generation-config'
+import {
+  getAspectRatioSize,
+  getImageGenerationConfig,
+  isGptImage2Model,
+  normalizeArkImageSize,
+} from '@/shared/config/image-generation-config'
 import { getDb } from '@/shared/db/db'
 import { getUploadsDir } from '@/shared/db/paths'
-import { generateImage } from '@/shared/image-generation/generate'
+import { createAndExecuteImageJob } from '@/shared/image-generation/job-executor'
+import { getImageJob, type ImageGenerationJob, type StoredReferenceImage } from '@/shared/image-generation/job-store'
 import type {
-  GenerateImageRequest,
   ImageReferenceInput,
   ResolvedImageReference,
 } from '@/shared/image-generation/types'
 
 export const IMAGE_MCP_SERVER_NAME = 'loom_image'
 export const IMAGE_GENERATION_TOOL_NAME = 'generate_image'
+const IMAGE_TOOL_TIMEOUT_MS = 10 * 60 * 1000
+const IMAGE_TOOL_POLL_MS = 1000
 
 interface RuntimeImageAttachment {
   name: string
@@ -27,6 +34,7 @@ interface CreateImageGenerationMcpServerOptions {
   sessionId: string
   cwd: string
   attachments?: RuntimeImageAttachment[]
+  abortSignal?: AbortSignal
 }
 
 const IMAGE_GENERATION_TOOL_SCHEMA = {
@@ -43,6 +51,15 @@ const IMAGE_GENERATION_TOOL_SCHEMA = {
   count: z.number().int().min(1).max(4).optional().describe('Number of images to generate.'),
 }
 
+export function isImageGenerationToolEnabled(): boolean {
+  try {
+    const config = getImageGenerationConfig(getDb())
+    return config.enabled === true
+  } catch {
+    return false
+  }
+}
+
 export function createImageGenerationMcpServer(options: CreateImageGenerationMcpServerOptions) {
   return createSdkMcpServer({
     name: IMAGE_MCP_SERVER_NAME,
@@ -50,7 +67,7 @@ export function createImageGenerationMcpServer(options: CreateImageGenerationMcp
     instructions: [
       'Use generate_image when the user asks to create, render, redraw, stylize, or transform an image.',
       'For reference-image tasks, pass mode image_to_image and include referenceImages when possible. Current image attachments can be used automatically.',
-      'The tool stores generated files locally and returns Markdown image links.',
+      'The tool stores generated files locally and returns structured JSON with jobId and downloadable image URLs. Do not return Markdown image syntax in the assistant response.',
     ].join('\n'),
     alwaysLoad: true,
     tools: [
@@ -79,22 +96,44 @@ export function createImageGenerationMcpServer(options: CreateImageGenerationMcp
               attachments: options.attachments || [],
             })
 
-            const request: GenerateImageRequest = {
-              prompt: args.prompt,
-              mode,
-              references,
-              aspectRatio: args.aspectRatio,
-              size: args.size,
-              outputName: args.outputName,
-              count: args.count || 1,
-              outputFormat: config.outputFormat,
+            const aspectRatio = normalizeAspectRatio(args.aspectRatio)
+            const baseSize = args.size?.trim() || getAspectRatioSize(aspectRatio)
+            const size = provider.apiFormat === 'ark-images' ? normalizeArkImageSize(baseSize) : baseSize
+            const jobId = createAndExecuteImageJob(
+              {
+                sessionId: options.sessionId,
+                prompt: args.prompt.trim(),
+                providerId: provider.id,
+                model: provider.model,
+                aspectRatio,
+                styleId: 'none',
+                size,
+                count: args.count || 1,
+                referenceImages: toStoredReferenceImages(references),
+                origin: 'agent-tool',
+              },
+              {
+                history: [],
+                referenceImages: references,
+              },
+            )
+            const job = await waitForCompletedImageJob(jobId, options.abortSignal)
+            if (job.status === 'error') {
+              return toolError(job.errorMessage || '图像生成失败。')
             }
-
-            const images = await generateImage(provider, request)
+            const images = extractGeneratedImages(job)
+            if (images.length === 0) {
+              return toolError('图像生成完成，但没有返回可用图片。')
+            }
             return {
               content: [{
                 type: 'text' as const,
-                text: formatGeneratedImages(provider.name, provider.model, images),
+                text: formatGeneratedImages({
+                  job,
+                  providerName: provider.name,
+                  model: provider.model,
+                  images,
+                }),
               }],
             }
           } catch (err) {
@@ -258,6 +297,106 @@ function isInside(child: string, parent: string): boolean {
   return relative === '' || (relative.length > 0 && !relative.startsWith('..') && !path.isAbsolute(relative))
 }
 
+function normalizeAspectRatio(value: string | undefined): string {
+  const normalized = value?.trim()
+  if (!normalized) return '1:1'
+  if (/^\d+\s*:\s*\d+$/.test(normalized)) return normalized.replace(/\s+/g, '')
+  return '1:1'
+}
+
+function toStoredReferenceImages(references: ResolvedImageReference[]): StoredReferenceImage[] {
+  const uploadsDir = path.resolve(getUploadsDir())
+  const stored: StoredReferenceImage[] = []
+  for (const ref of references) {
+    const resolved = path.resolve(ref.path)
+    if (!isInside(resolved, uploadsDir)) continue
+    const filename = path.basename(resolved)
+    stored.push({
+      name: ref.name || filename,
+      url: `/api/files/serve/${encodeURIComponent(filename)}`,
+      serverFilename: filename,
+      mimeType: ref.mimeType,
+    })
+  }
+  return stored
+}
+
+async function waitForCompletedImageJob(jobId: string, abortSignal?: AbortSignal): Promise<ImageGenerationJob> {
+  const db = getDb()
+  const startedAt = Date.now()
+  while (Date.now() - startedAt < IMAGE_TOOL_TIMEOUT_MS) {
+    if (abortSignal?.aborted) throw new Error('图像生成等待已取消；如果请求已经提交，结果稍后会保存在图像生成记录中。')
+    const job = getImageJob(db, jobId)
+    if (!job) throw new Error('图像生成任务不存在。')
+    if (job.status === 'success' || job.status === 'error') return job
+    await delay(IMAGE_TOOL_POLL_MS)
+  }
+  throw new Error('图像生成超时，请稍后在图像生成记录中查看结果。')
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+function extractGeneratedImages(job: ImageGenerationJob): Array<{ filename: string; url: string; relativeUrl: string; size?: number; mimeType?: string }> {
+  const metadataImages = Array.isArray(job.resultMetadata.images)
+    ? job.resultMetadata.images as Array<{ filename?: unknown; url?: unknown; bytes?: unknown; mimeType?: unknown }>
+    : []
+  const fromMetadata = metadataImages
+    .map(img => toToolImage({
+      filename: typeof img.filename === 'string' ? img.filename : undefined,
+      url: typeof img.url === 'string' ? img.url : undefined,
+      size: typeof img.bytes === 'number' ? img.bytes : undefined,
+      mimeType: typeof img.mimeType === 'string' ? img.mimeType : undefined,
+    }))
+    .filter((img): img is { filename: string; url: string; relativeUrl: string; size?: number; mimeType?: string } => Boolean(img))
+  if (fromMetadata.length > 0) return fromMetadata
+  return job.resultUrls
+    .map(url => toToolImage({ url }))
+    .filter((img): img is { filename: string; url: string; relativeUrl: string; size?: number; mimeType?: string } => Boolean(img))
+}
+
+function toToolImage(args: {
+  filename?: string
+  url?: string
+  size?: number
+  mimeType?: string
+}): { filename: string; url: string; relativeUrl: string; size?: number; mimeType?: string } | null {
+  const filename = safeServedFilename(args.filename || filenameFromServeUrl(args.url || ''))
+  if (!filename) return null
+  const relativeUrl = `/api/files/serve/${encodeURIComponent(filename)}`
+  return {
+    filename,
+    relativeUrl,
+    url: `${getLocalAppBaseUrl()}${relativeUrl}`,
+    size: args.size,
+    mimeType: args.mimeType,
+  }
+}
+
+function filenameFromServeUrl(value: string): string {
+  if (!value) return ''
+  try {
+    const url = new URL(value, 'http://localhost')
+    const parts = url.pathname.split('/')
+    return decodeURIComponent(parts[parts.length - 1] || '')
+  } catch {
+    return path.basename(value)
+  }
+}
+
+function safeServedFilename(value: string): string {
+  const filename = path.basename(value || '').trim()
+  if (!filename || filename === '.' || filename === '..') return ''
+  if (filename.includes('/') || filename.includes('\\') || filename.includes('..')) return ''
+  return filename
+}
+
+function getLocalAppBaseUrl(): string {
+  const port = process.env.PORT || '3000'
+  return `http://127.0.0.1:${port}`
+}
+
 function mimeFromPath(filePath: string): string {
   const ext = path.extname(filePath).toLowerCase()
   switch (ext) {
@@ -275,16 +414,39 @@ function mimeFromPath(filePath: string): string {
   }
 }
 
-function formatGeneratedImages(providerName: string, model: string, images: Array<{ filename: string; url: string; size: number }>): string {
-  const lines = [
-    `Generated ${images.length} image${images.length === 1 ? '' : 's'} with ${providerName} (${model}).`,
-    '',
-  ]
-  for (const image of images) {
-    lines.push(`- ${image.filename} (${Math.round(image.size / 1024)} KB): ${image.url}`)
-    lines.push(`![${image.filename}](${image.url})`)
+function formatGeneratedImages(args: {
+  job: ImageGenerationJob
+  providerName: string
+  model: string
+  images: Array<{ filename: string; url: string; relativeUrl: string; size?: number; mimeType?: string }>
+}): string {
+  const { job, providerName, model, images } = args
+  const metadata = job.resultMetadata as {
+    size?: unknown
+    format?: unknown
+    mode?: unknown
   }
-  return lines.join('\n')
+  return JSON.stringify({
+    kind: 'loom_image_generation_result',
+    status: 'succeeded',
+    message: `已生成 ${images.length} 张图片。`,
+    jobId: job.id,
+    imageCount: images.length,
+    providerId: job.providerId,
+    providerName,
+    model,
+    size: typeof metadata.size === 'string' ? metadata.size : job.size,
+    format: typeof metadata.format === 'string' ? metadata.format : undefined,
+    mode: typeof metadata.mode === 'string' ? metadata.mode : undefined,
+    images: images.map(image => ({
+      filename: image.filename,
+      url: image.url,
+      relativeUrl: image.relativeUrl,
+      mimeType: image.mimeType,
+      bytes: image.size,
+    })),
+    note: isGptImage2Model(model) ? 'GPT-Image2 出图时间较长，通常约 180 秒，但质量相对较高。' : undefined,
+  })
 }
 
 function toolError(message: string) {

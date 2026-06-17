@@ -7,7 +7,13 @@ const nextConfig: NextConfig = {
   images: {
     unoptimized: true,
   },
-  serverExternalPackages: ['better-sqlite3', '@larksuiteoapi/node-sdk'],
+  serverExternalPackages: [
+    'better-sqlite3',
+    '@larksuiteoapi/node-sdk',
+    'officeparser',
+    'pdfjs-dist',
+    'file-type',
+  ],
 }
 
 export default nextConfig

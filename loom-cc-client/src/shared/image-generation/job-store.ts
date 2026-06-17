@@ -2,6 +2,7 @@ import crypto from 'crypto'
 import type Database from 'better-sqlite3'
 
 export type ImageJobStatus = 'pending' | 'merging' | 'submitting' | 'waiting' | 'success' | 'error'
+export type ImageJobOrigin = 'manual' | 'agent-tool'
 
 export interface StoredReferenceImage {
   name: string
@@ -14,6 +15,7 @@ export interface ImageGenerationJob {
   id: string
   sessionId: string
   status: ImageJobStatus
+  origin: ImageJobOrigin
   providerId: string
   model: string
   prompt: string
@@ -40,12 +42,14 @@ export interface CreateImageJobParams {
   size: string
   count?: number
   referenceImages?: StoredReferenceImage[]
+  origin?: ImageJobOrigin
 }
 
 interface RawJobRow {
   id: string
   session_id: string
   status: string
+  origin?: string
   provider_id: string
   model: string
   prompt: string
@@ -73,6 +77,7 @@ function rowToJob(row: RawJobRow): ImageGenerationJob {
     id: row.id,
     sessionId: row.session_id,
     status: row.status as ImageJobStatus,
+    origin: row.origin === 'agent-tool' ? 'agent-tool' : 'manual',
     providerId: row.provider_id,
     model: row.model,
     prompt: row.prompt,
@@ -94,11 +99,12 @@ export function createImageJob(db: Database.Database, params: CreateImageJobPara
   const id = crypto.randomUUID()
   db.prepare(`
     INSERT INTO image_generation_jobs
-      (id, session_id, status, provider_id, model, prompt, aspect_ratio, style_id, size, count, reference_images)
-    VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?)
+      (id, session_id, status, origin, provider_id, model, prompt, aspect_ratio, style_id, size, count, reference_images)
+    VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     params.sessionId,
+    params.origin ?? 'manual',
     params.providerId,
     params.model,
     params.prompt,
@@ -119,7 +125,7 @@ export function getImageJob(db: Database.Database, id: string): ImageGenerationJ
 export function getSessionImageJobs(db: Database.Database, sessionId: string, limit = 5): ImageGenerationJob[] {
   const rows = db.prepare(`
     SELECT * FROM image_generation_jobs
-    WHERE session_id = ?
+    WHERE session_id = ? AND origin = 'manual'
     ORDER BY started_at ASC
     LIMIT ?
   `).all(sessionId, limit) as RawJobRow[]

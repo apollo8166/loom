@@ -178,9 +178,120 @@ function findNodeBinary(): string {
 }
 
 let serverProcess: ChildProcess | null = null
-let currentWatcher: FSWatcher | null = null
+let currentWatchers = new Map<string, FSWatcher>()
+let currentWatcherPath: string | null = null
+let watcherDebounceTimer: ReturnType<typeof setTimeout> | null = null
+let watcherRescanTimer: ReturnType<typeof setTimeout> | null = null
 
-const WATCH_IGNORED = new Set(['node_modules', '.git', '.next', 'dist', 'build', 'out'])
+const WATCH_IGNORED = new Set([
+  'node_modules', '.git', '.next', 'dist', 'build', 'out',
+  '__pycache__', '.DS_Store', '.turbo', '.cache', 'coverage',
+  '.nyc_output', 'tmp', '.tmp',
+])
+const MAX_WATCH_DEPTH = 6
+const MAX_WATCH_DIRECTORIES = 1200
+
+function stopCurrentWatcher(): void {
+  if (watcherDebounceTimer) {
+    clearTimeout(watcherDebounceTimer)
+    watcherDebounceTimer = null
+  }
+  if (watcherRescanTimer) {
+    clearTimeout(watcherRescanTimer)
+    watcherRescanTimer = null
+  }
+  for (const watcher of currentWatchers.values()) {
+    watcher.close()
+  }
+  currentWatchers = new Map()
+  currentWatcherPath = null
+}
+
+function shouldIgnoreWatchParts(parts: string[]): boolean {
+  return parts.some(part => WATCH_IGNORED.has(part))
+}
+
+function collectWatchDirectories(rootPath: string): Set<string> {
+  const root = path.resolve(rootPath)
+  const dirs = new Set<string>()
+  const queue: Array<{ dirPath: string; depth: number }> = [{ dirPath: root, depth: 1 }]
+
+  while (queue.length > 0 && dirs.size < MAX_WATCH_DIRECTORIES) {
+    const item = queue.shift()
+    if (!item) continue
+    if (dirs.has(item.dirPath)) continue
+    dirs.add(item.dirPath)
+    if (item.depth >= MAX_WATCH_DEPTH) continue
+
+    let entries
+    try {
+      entries = readdirSync(item.dirPath, { withFileTypes: true })
+    } catch {
+      continue
+    }
+
+    for (const entry of entries) {
+      if (!entry.isDirectory() || WATCH_IGNORED.has(entry.name)) continue
+      queue.push({ dirPath: path.join(item.dirPath, entry.name), depth: item.depth + 1 })
+    }
+  }
+
+  return dirs
+}
+
+function scheduleFsChanged(): void {
+  if (watcherDebounceTimer) clearTimeout(watcherDebounceTimer)
+  watcherDebounceTimer = setTimeout(() => {
+    watcherDebounceTimer = null
+    mainWindow?.webContents.send('fs:changed', { dirPath: currentWatcherPath })
+  }, 350)
+}
+
+function syncCurrentWatchers(): void {
+  if (!currentWatcherPath) return
+  const desiredDirs = collectWatchDirectories(currentWatcherPath)
+
+  for (const [dirPath, watcher] of currentWatchers) {
+    if (!desiredDirs.has(dirPath)) {
+      watcher.close()
+      currentWatchers.delete(dirPath)
+    }
+  }
+
+  for (const dirPath of desiredDirs) {
+    if (currentWatchers.has(dirPath)) continue
+    try {
+      const watcher = watch(dirPath, (_eventType, filename) => {
+        if (!currentWatcherPath) return
+        const rawName = filename?.toString()
+        const changedPath = rawName
+          ? path.resolve(dirPath, rawName)
+          : dirPath
+        const relativePath = path.relative(currentWatcherPath, changedPath)
+        if (relativePath.startsWith('..') || path.isAbsolute(relativePath)) return
+        const parts = relativePath.split(path.sep).filter(Boolean)
+        if (shouldIgnoreWatchParts(parts)) return
+        scheduleFsChanged()
+        scheduleWatcherRescan()
+      })
+      watcher.on('error', () => {
+        currentWatchers.delete(dirPath)
+        scheduleWatcherRescan()
+      })
+      currentWatchers.set(dirPath, watcher)
+    } catch {
+      // Directory may have been removed between scanning and watcher creation.
+    }
+  }
+}
+
+function scheduleWatcherRescan(): void {
+  if (watcherRescanTimer) clearTimeout(watcherRescanTimer)
+  watcherRescanTimer = setTimeout(() => {
+    watcherRescanTimer = null
+    syncCurrentWatchers()
+  }, 100)
+}
 
 function getFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -606,25 +717,23 @@ app.whenReady().then(async () => {
 
   // ── IPC: filesystem watcher ────────────────────────────────────────────
   ipcMain.handle('fs:watch', (_event, dirPath: string) => {
-    if (currentWatcher) {
-      currentWatcher.close()
-      currentWatcher = null
-    }
-    if (!dirPath) return
-    let debounceTimer: ReturnType<typeof setTimeout> | null = null
+    if (!dirPath) return { ok: false, error: 'Missing directory path' }
+    if (!existsSync(dirPath)) return { ok: false, error: 'Directory does not exist' }
     try {
-      currentWatcher = watch(dirPath, { recursive: true }, (_eventType, filename) => {
-        if (!filename) return
-        const parts = filename.split(path.sep)
-        if (parts.some(p => WATCH_IGNORED.has(p))) return
-        if (debounceTimer) clearTimeout(debounceTimer)
-        debounceTimer = setTimeout(() => {
-          mainWindow?.webContents.send('fs:changed')
-        }, 200)
-      })
+      stopCurrentWatcher()
+      currentWatcherPath = path.resolve(dirPath)
+      syncCurrentWatchers()
+      return { ok: true }
     } catch (err) {
       console.error('Failed to watch directory:', err)
+      stopCurrentWatcher()
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
     }
+  })
+
+  ipcMain.handle('fs:unwatch', () => {
+    stopCurrentWatcher()
+    return { ok: true }
   })
 
   // ── IPC: clipboard ─────────────────────────────────────────────────────
@@ -764,10 +873,7 @@ app.on('activate', () => {
 })
 
 app.on('before-quit', () => {
-  if (currentWatcher) {
-    currentWatcher.close()
-    currentWatcher = null
-  }
+  stopCurrentWatcher()
   if (serverProcess) {
     serverProcess.kill()
     serverProcess = null

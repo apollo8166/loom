@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import {
-  Loader2, FilePlus, FolderPlus, ChevronsUpDown,
+  Loader2, RefreshCw, FilePlus, FolderPlus, ChevronsUpDown,
   ChevronRight, Folder, FolderOpen, FileText, GitBranch,
   MapPin, Settings, Pencil, Trash2, FileVideo,
 } from 'lucide-react'
@@ -327,6 +327,7 @@ export function FileTreePanel({ projectId, workspacePath, projectName, onPreview
   const [files, setFiles] = useState<FileNode[]>([])
   const [branch, setBranch] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set([ROOT_PATH]))
   const [allExpanded, setAllExpanded] = useState(false)
 
@@ -337,6 +338,7 @@ export function FileTreePanel({ projectId, workspacePath, projectName, onPreview
   // Context menu
   const [contextMenu, setContextMenu] = useState<{ path: string; name: string; isDir: boolean; x: number; y: number } | null>(null)
   const ctxMenuRef = useRef<HTMLDivElement>(null)
+  const loadSeqRef = useRef(0)
 
   // Delete confirm
   const [deleteConfirm, setDeleteConfirm] = useState<{ path: string; name: string; isDir: boolean } | null>(null)
@@ -396,33 +398,70 @@ export function FileTreePanel({ projectId, workspacePath, projectName, onPreview
   }, [projectId])
 
   /* ── Fetch ── */
-  const refresh = useCallback(() => {
-    fetch(`/api/projects/${projectId}/files`)
-      .then(r => r.json())
-      .then(data => {
-        setFiles(data.files || [])
-        setBranch(data.branch || null)
+  const loadFiles = useCallback(async (options?: { force?: boolean; showSpinner?: boolean; resetExpanded?: boolean }) => {
+    const force = options?.force ?? false
+    const showSpinner = options?.showSpinner ?? false
+    const seq = ++loadSeqRef.current
+    if (showSpinner) setRefreshing(true)
+    try {
+      const searchParams = new URLSearchParams()
+      if (force) {
+        searchParams.set('refresh', '1')
+        searchParams.set('_', String(Date.now()))
+      }
+      const query = searchParams.toString()
+      const res = await fetch(`/api/projects/${projectId}/files${query ? `?${query}` : ''}`, {
+        cache: force ? 'no-store' : 'default',
       })
-      .catch(() => {})
-  }, [projectId])
-
-  useEffect(() => {
-    setLoading(true)
-    fetch(`/api/projects/${projectId}/files`)
-      .then(r => r.json())
-      .then(data => {
-        const fetched: FileNode[] = data.files || []
-        setFiles(fetched)
-        setBranch(data.branch || null)
+      if (!res.ok) return
+      const data = await res.json() as { files?: FileNode[]; branch?: string | null }
+      if (seq !== loadSeqRef.current) return
+      const fetched = data.files || []
+      setFiles(fetched)
+      setBranch(data.branch || null)
+      if (options?.resetExpanded) {
         const auto = new Set<string>([ROOT_PATH])
         for (const n of fetched) {
           if (n.type === 'dir' && n.name === '.claude') auto.add(n.path)
         }
         setExpandedPaths(auto)
-      })
+        setAllExpanded(false)
+      }
+    } catch {
+      // Keep the last known tree if a transient refresh fails.
+    } finally {
+      if (showSpinner) setRefreshing(false)
+    }
+  }, [projectId])
+
+  useEffect(() => {
+    setLoading(true)
+    setSelectedPath(ROOT_PATH)
+    setSelectedIsDir(true)
+    loadFiles({ force: true, resetExpanded: true })
       .catch(() => {})
       .finally(() => setLoading(false))
-  }, [projectId])
+  }, [projectId, loadFiles])
+
+  useEffect(() => {
+    if (!workspacePath || !window.electronAPI?.watchDirectory || !window.electronAPI?.onFsChanged) return
+    let disposed = false
+    const normalizedWorkspacePath = workspacePath.replace(/\/+$/, '')
+
+    window.electronAPI.watchDirectory(workspacePath).catch(() => {})
+    const offFsChanged = window.electronAPI.onFsChanged(payload => {
+      if (disposed) return
+      const changedDirPath = payload?.dirPath?.replace(/\/+$/, '')
+      if (changedDirPath && changedDirPath !== normalizedWorkspacePath) return
+      void loadFiles({ force: true })
+    })
+
+    return () => {
+      disposed = true
+      offFsChanged()
+      window.electronAPI?.unwatchDirectory?.().catch(() => {})
+    }
+  }, [workspacePath, loadFiles])
 
   /* ── Close context menu on outside click ── */
   useEffect(() => {
@@ -502,8 +541,8 @@ export function FileTreePanel({ projectId, workspacePath, projectName, onPreview
     })
     setCreating(null)
     setCreateValue('')
-    refresh()
-  }, [creating, createValue, projectId, refresh])
+    void loadFiles({ force: true })
+  }, [creating, createValue, projectId, loadFiles])
 
   const handleCreateCancel = useCallback(() => {
     setCreating(null)
@@ -528,8 +567,8 @@ export function FileTreePanel({ projectId, workspacePath, projectName, onPreview
     setRenameValue('')
     setSelectedPath(ROOT_PATH)
     setSelectedIsDir(true)
-    refresh()
-  }, [renamingPath, renameValue, projectId, refresh])
+    void loadFiles({ force: true })
+  }, [renamingPath, renameValue, projectId, loadFiles])
 
   const handleRenameCancel = useCallback(() => {
     setRenamingPath(null)
@@ -547,8 +586,8 @@ export function FileTreePanel({ projectId, workspacePath, projectName, onPreview
     setDeleteConfirm(null)
     setSelectedPath(ROOT_PATH)
     setSelectedIsDir(true)
-    refresh()
-  }, [deleteConfirm, projectId, refresh])
+    void loadFiles({ force: true })
+  }, [deleteConfirm, projectId, loadFiles])
 
   const cbs: TreeCbs = {
     onToggle: togglePath,
@@ -584,6 +623,20 @@ export function FileTreePanel({ projectId, workspacePath, projectName, onPreview
       }}>
         <span style={{ flex: 1, fontSize: 12, fontWeight: 600, color: 'var(--color-text-primary)' }}>Files</span>
         <div style={{ display: 'flex', gap: 2 }}>
+          <button
+            onClick={() => void loadFiles({ force: true, showSpinner: true })}
+            disabled={refreshing}
+            title="刷新文件列表"
+            style={{
+              width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: 'none', border: 'none', borderRadius: 6,
+              color: 'var(--color-text-muted)',
+              cursor: refreshing ? 'default' : 'pointer',
+              opacity: refreshing ? 0.65 : 1,
+            }}
+          >
+            <RefreshCw size={13} className={refreshing ? 'animate-spin' : undefined} />
+          </button>
           <button
             onClick={() => selectedIsDir && startCreate('file')}
             disabled={!selectedIsDir}

@@ -19,6 +19,18 @@ interface ProjectPageProps {
 }
 
 type ImChannelPanelId = 'feishu'
+type RuntimeAttachmentPayload = {
+  name: string
+  filename: string
+  mimeType: string
+  tier: string
+  originalFilename?: string
+  displayFilename?: string
+  displayMimeType?: string
+  readable?: boolean
+  extractError?: string
+  placeholder?: string
+}
 
 const IM_CHANNEL_NAV: Array<{ id: ImChannelPanelId; label: string; Icon: React.ElementType }> = [
   { id: 'feishu', label: 'Feishu', Icon: Send },
@@ -39,7 +51,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
     permissionMode?: string; thinkingMode?: string; planMode?: boolean
     agentName?: string
     enabledSkills?: string[]
-    attachments?: Array<{ name: string; filename: string; mimeType: string; tier: string; originalFilename?: string }>
+    attachments?: RuntimeAttachmentPayload[]
   } | null>(null)
 
   type SessionDraft = { workspacePath: string | null; attachedFolderPaths: string[]; useWorktree: boolean }
@@ -145,7 +157,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
     enabledSkills?: string[]
     permissionMode: string
     thinkingMode: string
-    attachments?: Array<{ name: string; filename: string; mimeType: string; tier: string; originalFilename?: string }>
+    attachments?: RuntimeAttachmentPayload[]
     planMode: boolean
   }) => {
     if (!project) return

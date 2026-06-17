@@ -114,6 +114,7 @@ export async function POST(
       size: job.size,
       count: job.count,
       referenceImages: retryReferences,
+      origin: job.origin,
     },
     {
       history: body.history ?? [],

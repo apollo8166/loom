@@ -77,7 +77,7 @@ export async function POST(req: Request) {
     thinkingMode?: string
     planMode?: boolean
     enabledSkills?: string[]
-    attachments?: Array<{ name: string; filename: string; mimeType: string; tier: string }>
+    attachments?: Array<{ name: string; filename: string; mimeType: string; tier: string; originalFilename?: string; displayFilename?: string; displayMimeType?: string; readable?: boolean; extractError?: string; placeholder?: string }>
   }
   try {
     body = await req.json()
@@ -110,15 +110,26 @@ export async function POST(req: Request) {
   const { message } = body
 
   const uploadsDir = getUploadsDir()
-  const attachments: LoomAttachment[] = (body.attachments || []).map(a => {
+  const attachments: Array<LoomAttachment & { originalFilename?: string; displayFilename?: string; displayMimeType?: string }> = (body.attachments || []).map(a => {
     const safeFilename = a.filename.replace(/\.\./g, '').replace(/[/\\]/g, '_')
     return {
       name: a.name,
       serverPath: path.join(uploadsDir, safeFilename),
       mimeType: a.mimeType,
       tier: a.tier as LoomAttachment['tier'],
+      originalFilename: a.originalFilename?.replace(/\.\./g, '').replace(/[/\\]/g, '_'),
+      displayFilename: a.displayFilename?.replace(/\.\./g, '').replace(/[/\\]/g, '_'),
+      displayMimeType: a.displayMimeType,
+      readable: a.readable,
+      extractError: a.extractError,
+      placeholder: a.placeholder,
     }
   })
+
+  const unreadablePdf = attachments.find(a => a.tier === 'pdf' && a.readable === false)
+  if (unreadablePdf) {
+    return jsonError(`${unreadablePdf.name} 当前无法提取可读文字，请换成可复制文字的 PDF，或先转成 txt/docx 后再发送。`, 400)
+  }
 
   if (!message && attachments.length === 0) {
     return jsonError('message (or attachments) required', 400)
@@ -176,11 +187,20 @@ export async function POST(req: Request) {
   const userMsgBlocks: Array<Record<string, unknown>> = []
   if (message?.trim()) userMsgBlocks.push({ type: 'text', text: message.trim() })
   for (const a of attachments) {
-    const fname = path.basename(a.serverPath)
+    const fname = a.displayFilename || a.originalFilename || path.basename(a.serverPath)
     if (a.tier === 'image') {
-      userMsgBlocks.push({ type: 'image_attachment', url: `/api/files/upload/${fname}`, name: a.name })
+      userMsgBlocks.push({ type: 'image_attachment', url: `/api/files/serve/${fname}`, name: a.name })
     } else {
-      userMsgBlocks.push({ type: 'file_attachment', url: `/api/files/upload/${fname}`, name: a.name, size: 0, mimeType: a.mimeType })
+      userMsgBlocks.push({
+        type: 'file_attachment',
+        url: `/api/files/serve/${fname}`,
+        name: a.name,
+        size: 0,
+        mimeType: a.displayMimeType || a.mimeType,
+        ...(a.originalFilename ? { originalFilename: a.originalFilename } : {}),
+        ...(a.displayFilename ? { displayUrl: `/api/files/serve/${a.displayFilename}` } : {}),
+        ...(a.displayMimeType ? { displayMimeType: a.displayMimeType } : {}),
+      })
     }
   }
   if (userMsgBlocks.length === 0) userMsgBlocks.push({ type: 'text', text: effectiveMessage })
@@ -236,6 +256,7 @@ export async function POST(req: Request) {
       const q = createLoomQuery({
         prompt: promptForQuery,
         sessionId: runtimeSessionId,
+        loomSessionId: sessionId!,
         model: session.model,
         abortController,
         canUseTool,
@@ -277,6 +298,7 @@ export async function POST(req: Request) {
         const retryQ = createLoomQuery({
           prompt: historyPrompt,
           sessionId: crypto.randomUUID(),
+          loomSessionId: sessionId!,
           model: session.model,
           abortController,
           canUseTool,

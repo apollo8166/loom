@@ -71,6 +71,19 @@ function localFileNameFromHref(rawHref: string): string | null {
   return filePath ? basenameFromPath(filePath) : null
 }
 
+function fileNameFromHref(rawHref: string): string | null {
+  const localName = localFileNameFromHref(rawHref)
+  if (localName) return localName
+  try {
+    const base = typeof window === 'undefined' ? 'http://localhost' : window.location.origin
+    const url = new URL(rawHref, base)
+    const name = basenameFromPath(safeDecodeURIComponent(url.pathname))
+    return name && name !== '/' ? name : null
+  } catch {
+    return basenameFromPath(safeDecodeURIComponent(rawHref)) || null
+  }
+}
+
 function rewriteLocalFileUrls(markdown: string): string {
   const lines = markdown.split(/\r?\n/)
   let inFence = false
@@ -133,6 +146,21 @@ function mimeTypeFromName(name: string): string {
     pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   }
   return map[ext] || 'application/octet-stream'
+}
+
+function imageMimeTypeFromName(name: string): string {
+  const mimeType = mimeTypeFromName(name)
+  return mimeType.startsWith('image/') ? mimeType : 'image/png'
+}
+
+function isServedFileHref(rawHref: string): boolean {
+  try {
+    const base = typeof window === 'undefined' ? 'http://localhost' : window.location.origin
+    const url = new URL(rawHref, base)
+    return /^\/api\/files\/(?:serve|upload)\//.test(url.pathname)
+  } catch {
+    return /^\/api\/files\/(?:serve|upload)\//.test(rawHref)
+  }
 }
 
 function canUseLocalPreviewApi(name: string): boolean {
@@ -296,9 +324,9 @@ function LocalImageLink({
   children: ReactNode
   onPreviewFile?: (file: MarkdownPreviewFile) => void
 }) {
-  const name = localFileNameFromHref(href) || nodeText(children).trim() || ''
+  const name = fileNameFromHref(href) || nodeText(children).trim() || 'image.png'
   const handleClick = useCallback(() => {
-    onPreviewFile?.({ url: href, name: name || 'image', mimeType: mimeTypeFromName(name) })
+    onPreviewFile?.({ url: href, name, mimeType: imageMimeTypeFromName(name) })
   }, [href, name, onPreviewFile])
 
   return (
@@ -332,11 +360,17 @@ function renderLocalAwareLink(
 ) {
   const safeHref = typeof href === 'string' ? normalizeFileUrl(href) : href
   if (typeof safeHref === 'string' && localFilePathFromHref(safeHref)) {
-    const name = localFileNameFromHref(safeHref) || nodeText(children)
+    const name = fileNameFromHref(safeHref) || nodeText(children)
     if (IMAGE_EXTS.has(extensionFromName(name))) {
       return <LocalImageLink href={safeHref} onPreviewFile={onPreviewFile}>{children}</LocalImageLink>
     }
     return <LocalFileCard href={safeHref} onPreviewFile={onPreviewFile}>{children}</LocalFileCard>
+  }
+  if (typeof safeHref === 'string' && isServedFileHref(safeHref)) {
+    const name = fileNameFromHref(safeHref) || nodeText(children)
+    if (IMAGE_EXTS.has(extensionFromName(name))) {
+      return <LocalImageLink href={safeHref} onPreviewFile={onPreviewFile}>{children}</LocalImageLink>
+    }
   }
   return (
     <a href={safeHref} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--color-accent-primary)' }} className="hover:underline">
@@ -354,18 +388,19 @@ function ChatImage({
   alt?: string
   onPreviewFile?: (file: MarkdownPreviewFile) => void
 }) {
-  const name = localFileNameFromHref(src) || alt || 'image'
+  const name = fileNameFromHref(src) || alt || 'image.png'
+  const canPreview = Boolean(onPreviewFile)
   const handleClick = useCallback(() => {
     if (!onPreviewFile) return
-    onPreviewFile({ url: src, name, mimeType: mimeTypeFromName(name) })
+    onPreviewFile({ url: src, name, mimeType: imageMimeTypeFromName(name) })
   }, [name, onPreviewFile, src])
 
   return (
     <span
       className="inline-block my-2"
       onClick={handleClick}
-      style={{ cursor: onPreviewFile && localFilePathFromHref(src) ? 'pointer' : 'default' }}
-      title={onPreviewFile && localFilePathFromHref(src) ? '点击预览' : name}
+      style={{ cursor: canPreview ? 'pointer' : 'default' }}
+      title={canPreview ? '点击预览' : name}
     >
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img

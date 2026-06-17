@@ -23,6 +23,11 @@ import { getModelEntry } from '@/shared/config/models'
 import { LOOM_TOOL_RULES, buildEnvironmentPrompt } from './system-prompt'
 import { getDefaultWorkspacesDir } from '@/shared/db/paths'
 import { logger } from '@/shared/logging/logger'
+import {
+  createImageGenerationMcpServer,
+  IMAGE_MCP_SERVER_NAME,
+  isImageGenerationToolEnabled,
+} from './image-generation-tool'
 
 // ── Claude CLI Binary Discovery ─────────────────────────────────
 
@@ -279,6 +284,12 @@ export interface LoomAttachment {
   serverPath: string
   mimeType: string
   tier: 'image' | 'pdf' | 'text' | 'binary'
+  originalFilename?: string
+  displayFilename?: string
+  displayMimeType?: string
+  readable?: boolean
+  extractError?: string
+  placeholder?: string
 }
 
 export const TEXT_ATTACHMENT_MAX_CHARS = 100_000
@@ -286,6 +297,8 @@ export const TEXT_ATTACHMENT_MAX_CHARS = 100_000
 export interface LoomQueryOptions {
   prompt: string
   sessionId: string
+  /** Loom database session id. Differs from SDK runtime session id after provider/session resets. */
+  loomSessionId?: string
   model: string
   abortController?: AbortController
   canUseTool?: CanUseTool
@@ -438,6 +451,10 @@ export function createLoomQuery(opts: LoomQueryOptions): Query {
   const runtimeSettings = buildSdkRuntimeSettings()
   const runtimeSettingsLog = runtimeSettings as { autoCompactEnabled?: boolean; autoCompactWindow?: number }
   const projectCustomization = inspectProjectCustomization(cwd)
+  const imageGenerationToolEnabled = !opts.planMode && isImageGenerationToolEnabled()
+  if (imageGenerationToolEnabled && !sdkEnv.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT) {
+    sdkEnv.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT = '600000'
+  }
 
   const isClaudeDirWrite = (input: Record<string, unknown>): boolean => {
     const filePath = String(input.file_path || input.path || '')
@@ -467,6 +484,18 @@ export function createLoomQuery(opts: LoomQueryOptions): Query {
     ...(opts.additionalDirectories && opts.additionalDirectories.length > 0 ? { additionalDirectories: opts.additionalDirectories } : {}),
     ...(opts.enabledSkills && opts.enabledSkills.length > 0 ? { skills: opts.enabledSkills } : {}),
     ...(opts.maxTurns ? { maxTurns: opts.maxTurns } : {}),
+    ...(imageGenerationToolEnabled
+      ? {
+          mcpServers: {
+            [IMAGE_MCP_SERVER_NAME]: createImageGenerationMcpServer({
+              sessionId: opts.loomSessionId || opts.sessionId,
+              cwd,
+              attachments: opts.attachments ?? [],
+              abortSignal: opts.abortController?.signal,
+            }),
+          },
+        }
+      : {}),
     ...(isAnthropic ? { betas: ['context-1m-2025-08-07'] } : {}),
     ...(claudePath ? { pathToClaudeCodeExecutable: claudePath } : {}),
     ...(opts.useWorktree ? { worktree: { baseRef: 'head' as const } } : {}),
@@ -494,6 +523,7 @@ export function createLoomQuery(opts: LoomQueryOptions): Query {
     enabledSkillCount: opts.enabledSkills?.length ?? 0,
     attachmentCount: opts.attachments?.length ?? 0,
     additionalDirectoryCount: opts.additionalDirectories?.length ?? 0,
+    imageGenerationToolEnabled,
     planMode: Boolean(opts.planMode),
     useWorktree: Boolean(opts.useWorktree),
     supportsThinking,
@@ -641,6 +671,21 @@ export function createLoomQuery(opts: LoomQueryOptions): Query {
 
 function buildMultimodalContent(prompt: string, attachments: LoomAttachment[]): ContentBlockParam[] {
   const blocks: ContentBlockParam[] = []
+  const manifestLines = attachments.map((att, idx) => {
+    const placeholder = att.placeholder || `[Attachment #${idx + 1}]`
+    const source = att.tier === 'text' && att.displayMimeType === 'application/pdf'
+      ? 'PDF text extracted by Loom'
+      : att.tier === 'image'
+        ? 'image uploaded through Loom'
+        : att.tier === 'pdf'
+          ? 'PDF uploaded through Loom'
+          : 'file uploaded through Loom'
+    return `${idx + 1}. ${placeholder} ${att.name} - ${source}`
+  })
+  blocks.push({
+    type: 'text',
+    text: `<loom_attachments>\nThese attachments were uploaded through Loom and are not files in the workspace:\n${manifestLines.join('\n')}\nUse the provided attachment content directly. Do not use Glob, Grep, or Read to search the project directory for these attachment placeholders.\n</loom_attachments>`,
+  })
 
   for (const att of attachments) {
     try {
@@ -649,14 +694,19 @@ function buildMultimodalContent(prompt: string, attachments: LoomAttachment[]): 
         const base64 = data.toString('base64')
         const mediaType = att.mimeType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp'
         blocks.push({ type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } })
-      } else if (att.tier === 'pdf') {
-        const data = fs.readFileSync(att.serverPath)
-        const base64 = data.toString('base64')
-        blocks.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 } } as ContentBlockParam)
       } else if (att.tier === 'text') {
         const content = fs.readFileSync(att.serverPath, 'utf-8')
         const truncated = content.length > TEXT_ATTACHMENT_MAX_CHARS ? content.slice(0, TEXT_ATTACHMENT_MAX_CHARS) + '\n\n[... truncated]' : content
-        blocks.push({ type: 'text', text: `<file name="${att.name}">\n${truncated}\n</file>` })
+        const sourceLabel = att.displayMimeType === 'application/pdf' ? 'pdf_text' : 'file_text'
+        blocks.push({ type: 'text', text: `<${sourceLabel} name="${att.name}">\n${truncated}\n</${sourceLabel}>` })
+      } else if (att.tier === 'pdf') {
+        logger.warn('runtime.sdk.pdf_text_unavailable', {
+          attachmentName: att.name,
+          originalFilename: att.originalFilename,
+          displayFilename: att.displayFilename,
+          extractError: att.extractError,
+        })
+        blocks.push({ type: 'text', text: `<unreadable_pdf name="${att.name}">\nLoom could not extract readable text from this PDF. Ask the user for a text-based PDF, TXT/DOCX conversion, or OCR output before analyzing its contents.\n</unreadable_pdf>` })
       } else {
         blocks.push({ type: 'text', text: `[Attached binary file: ${att.name} (${att.mimeType})]` })
       }

@@ -11,8 +11,9 @@ declare global {
       openFileDialog: (options?: Electron.OpenDialogOptions) => Promise<string | null>
 
       // Filesystem watcher
-      watchDirectory: (dirPath: string) => Promise<void>
-      onFsChanged: (callback: () => void) => () => void
+      watchDirectory: (dirPath: string) => Promise<{ ok: boolean; error?: string }>
+      unwatchDirectory: () => Promise<{ ok: boolean; error?: string }>
+      onFsChanged: (callback: (payload?: { dirPath?: string | null }) => void) => () => void
 
       // Clipboard
       readClipboardFiles: () => Promise<string[]>

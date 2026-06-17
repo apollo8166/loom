@@ -71,7 +71,7 @@ export function summarizeAttachments(attachments: Array<LoomAttachment & { origi
     policy: {
       textAttachmentMaxChars: TEXT_ATTACHMENT_MAX_CHARS,
       imageHandling: 'sent as SDK image block',
-      pdfHandling: 'sent as SDK document block',
+      pdfHandling: 'prefer text extraction; if no text is available, reject as unreadable until OCR/text conversion is provided',
       binaryHandling: 'sent as text placeholder',
     },
   }

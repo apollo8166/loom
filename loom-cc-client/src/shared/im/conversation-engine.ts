@@ -223,6 +223,7 @@ export class ImConversationEngine {
     const q = createLoomQuery({
       prompt: params.message.text || params.attachments.map(a => `[${a.name}]`).join(' '),
       sessionId: params.runtimeSessionId,
+      loomSessionId: params.resolution.sessionId,
       model: params.model,
       projectWorkspacePath: params.resolution.workspacePath,
       attachments: params.attachments.length > 0 ? params.attachments : undefined,

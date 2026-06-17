@@ -8,6 +8,18 @@ import { ProjectSidebar } from '@/components/projects/project-sidebar'
 import { WorkbenchView } from '@/components/chat/workbench-view'
 
 type SessionDraft = { workspacePath: string | null; attachedFolderPaths: string[]; useWorktree: boolean }
+type RuntimeAttachmentPayload = {
+  name: string
+  filename: string
+  mimeType: string
+  tier: string
+  originalFilename?: string
+  displayFilename?: string
+  displayMimeType?: string
+  readable?: boolean
+  extractError?: string
+  placeholder?: string
+}
 
 export default function ChatPage() {
   const [project, setProject] = useState<Project | null>(null)
@@ -21,7 +33,7 @@ export default function ChatPage() {
     sessionId: string; displayPrompt: string; effectivePrompt: string; execUpdateUrl?: string
     permissionMode?: string; thinkingMode?: string; planMode?: boolean
     enabledSkills?: string[]
-    attachments?: Array<{ name: string; filename: string; mimeType: string; tier: string; originalFilename?: string }>
+    attachments?: RuntimeAttachmentPayload[]
   } | null>(null)
 
   useEffect(() => {
@@ -149,7 +161,7 @@ export default function ChatPage() {
     enabledSkills?: string[]
     permissionMode: string
     thinkingMode: string
-    attachments?: Array<{ name: string; filename: string; mimeType: string; tier: string; originalFilename?: string }>
+    attachments?: RuntimeAttachmentPayload[]
     planMode: boolean
   }) => {
     if (!project || !sessionDraft) return

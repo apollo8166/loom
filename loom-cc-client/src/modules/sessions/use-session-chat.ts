@@ -1057,7 +1057,7 @@ export function useSessionChat(sessionId: string | null) {
     content: string,
     permissionMode?: string,
     thinkingMode?: string,
-    attachments?: Array<{ name: string; filename: string; mimeType: string; tier: string; originalFilename?: string }>,
+    attachments?: Array<{ name: string; filename: string; mimeType: string; tier: string; originalFilename?: string; displayFilename?: string; displayMimeType?: string; readable?: boolean; extractError?: string; placeholder?: string }>,
     planMode?: boolean,
     displayContent?: string,
     resumePending?: boolean,
@@ -1100,10 +1100,14 @@ export function useSessionChat(sessionId: string | null) {
           if (a.tier === 'image') {
             userBlocks.push({ type: 'image_attachment', url: `/api/files/serve/${a.filename}`, name: a.name })
           } else {
+            const displayFilename = a.displayFilename || a.originalFilename || a.filename
+            const displayMimeType = a.displayMimeType || a.mimeType
             userBlocks.push({
-              type: 'file_attachment', url: `/api/files/serve/${a.filename}`, name: a.name,
-              size: 0, mimeType: a.mimeType,
+              type: 'file_attachment', url: `/api/files/serve/${displayFilename}`, name: a.name,
+              size: 0, mimeType: displayMimeType,
               ...(a.originalFilename ? { originalFilename: a.originalFilename } : {}),
+              ...(a.displayFilename ? { displayUrl: `/api/files/serve/${a.displayFilename}` } : {}),
+              ...(a.displayMimeType ? { displayMimeType: a.displayMimeType } : {}),
             })
           }
         }

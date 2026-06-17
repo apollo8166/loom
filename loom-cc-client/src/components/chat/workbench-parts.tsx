@@ -6,15 +6,17 @@ import {
   ArrowUp, Square, ChevronDown, ChevronRight, XCircle, Loader2, ShieldAlert,
   X, Check, Copy, Shield, ShieldOff, Globe, Terminal, FileText, Search, FileDiff,
   ZapOff, Zap, Sparkles, Bot, Crown, Rabbit, Route, PenLine, MessageCircle,
-  FileVideo,
+  FileVideo, Image as ImageIcon,
 } from 'lucide-react'
 import { cn } from '@/shared/lib/utils'
 import type { Message, ContentBlock, PermissionStatus, SessionBoundary, AskUserQuestionItem, AskUserQuestionAnswers, AskUserQuestionAnnotations, AskUserQuestionStatus } from '@/shared/types'
 import type { PreviewFile } from '@/components/chat/file-preview-panel'
 import { MarkdownRenderer } from '@/components/chat/markdown-renderer'
 import { AgentBlock, ParallelAgentIndicator, isAgentToolCall } from '@/components/chat/agent-block'
+import { ImageJobCard } from '@/components/chat/image-job-card'
 import { BUILTIN_MODELS, PROVIDER_MODEL_CATALOGS } from '@/shared/config/models'
 import type { AgentSubBlock } from '@/shared/types'
+import type { ImageGenerationJob } from '@/shared/image-generation/job-store'
 
 /* ── Tool helpers ── */
 
@@ -32,11 +34,15 @@ export function getToolSummary(name: string, input: Record<string, unknown>): st
     case 'ToolSearch': return String(input.query || '').slice(0, 80)
     case 'NotebookEdit': return String(input.file_path || '')
     case 'Skill': return String(input.skill || '')
-  default: return ''
+    case 'generate_image': return String(input.prompt || '').slice(0, 80)
+  default:
+    if (isImageGenerationToolCall(name)) return String(input.prompt || '').slice(0, 80)
+    return ''
   }
 }
 
 export function getToolIcon(name: string): React.ElementType {
+  if (isImageGenerationToolCall(name)) return ImageIcon
   if (name === 'Bash' || name === 'run_command') return Terminal
   if (name === 'WebSearch') return Search
   if (name === 'WebFetch') return Globe
@@ -48,6 +54,210 @@ export function getToolIcon(name: string): React.ElementType {
     </svg>
   )
   return FileDiff
+}
+
+function isImageGenerationToolCall(name: string): boolean {
+  const normalized = name.toLowerCase()
+  return normalized === 'generate_image' ||
+    normalized === 'mcp__loom_image__generate_image' ||
+    (normalized.includes('loom_image') && normalized.includes('generate_image'))
+}
+
+function extractMarkdownImages(content: string): Array<{ alt: string; url: string }> {
+  const images: Array<{ alt: string; url: string }> = []
+  const seen = new Set<string>()
+  const regex = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g
+  let match: RegExpExecArray | null
+  while ((match = regex.exec(content)) !== null) {
+    const url = match[2]?.trim()
+    if (!url || seen.has(url)) continue
+    seen.add(url)
+    images.push({ alt: match[1]?.trim() || 'generated image', url })
+  }
+  return images.slice(0, 8)
+}
+
+function extractImageJobId(content: string): string | null {
+  const structured = parseImageToolResult(content)
+  if (structured?.jobId) return structured.jobId
+  const match = content.match(/(?:任务\s*ID|Job\s*ID)\s*[：:]\s*([0-9a-f-]{20,})/i)
+  return match?.[1] ?? null
+}
+
+type ParsedImageToolResult = {
+  jobId: string | null
+  images: Array<{ alt: string; url: string }>
+}
+
+function parseImageToolResult(content: string): ParsedImageToolResult | null {
+  return parseImageToolResultValue(content, 0)
+}
+
+function parseImageToolResultValue(value: unknown, depth: number): ParsedImageToolResult | null {
+  if (depth > 5) return null
+  if (typeof value === 'string') {
+    try {
+      return parseImageToolResultValue(JSON.parse(value), depth + 1)
+    } catch {
+      return null
+    }
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const parsed = parseImageToolResultValue(item, depth + 1)
+      if (parsed) return parsed
+    }
+    return null
+  }
+
+  if (!value || typeof value !== 'object') return null
+  const parsed = value as {
+    kind?: unknown
+    type?: unknown
+    text?: unknown
+    content?: unknown
+    jobId?: unknown
+    images?: unknown
+  }
+
+  if (parsed.kind !== 'loom_image_generation_result') {
+    if (parsed.type === 'text' && typeof parsed.text === 'string') {
+      return parseImageToolResultValue(parsed.text, depth + 1)
+    }
+    if (parsed.content !== undefined) {
+      return parseImageToolResultValue(parsed.content, depth + 1)
+    }
+    return null
+  }
+
+  const rawImages = Array.isArray(parsed.images) ? parsed.images : []
+  return {
+    jobId: typeof parsed.jobId === 'string' ? parsed.jobId : null,
+    images: rawImages
+      .map((item): { alt: string; url: string } | null => {
+        if (!item || typeof item !== 'object') return null
+        const image = item as { filename?: unknown; url?: unknown }
+        if (typeof image.url !== 'string' || !image.url) return null
+        return {
+          alt: typeof image.filename === 'string' ? image.filename : 'generated image',
+          url: image.url,
+        }
+      })
+      .filter((item): item is { alt: string; url: string } => Boolean(item)),
+  }
+}
+
+function extractImageToolUrls(content: string): string[] {
+  const parsed = parseImageToolResult(content)
+  const urls = parsed?.images.map(image => image.url) ?? []
+  return [...urls, ...extractMarkdownImages(content).map(image => image.url)]
+}
+
+function stripDuplicateGeneratedImages(content: string, generatedUrls: Set<string>): string {
+  if (generatedUrls.size === 0) return content
+  return content
+    .replace(/!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g, (full, _alt: string, url: string) => {
+      return generatedUrls.has(String(url).trim()) ? '' : full
+    })
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+function ImageToolStatusCard({
+  title,
+  description,
+  loading = false,
+}: {
+  title: string
+  description?: string
+  loading?: boolean
+}) {
+  return (
+    <div className="mt-2 pl-5">
+      <div style={{
+        border: '1px solid var(--theme-border)',
+        borderRadius: 8,
+        background: 'var(--theme-bg-raised)',
+        padding: '10px 12px',
+        maxWidth: 520,
+      }}>
+        <div className="flex items-center gap-2">
+          {loading && <Loader2 size={13} className="animate-spin" style={{ color: 'var(--color-accent-primary)' }} />}
+          <span className="text-[12px] font-medium" style={{ color: 'var(--color-text-primary)' }}>{title}</span>
+        </div>
+        {description && (
+          <p className="mt-1 text-[11px]" style={{ color: 'var(--color-text-muted)' }}>{description}</p>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function ImageToolResultView({
+  jobId,
+}: {
+  jobId: string | null
+}) {
+  const [job, setJob] = useState<ImageGenerationJob | null>(null)
+  const [error, setError] = useState<string>('')
+
+  useEffect(() => {
+    if (!jobId) {
+      setJob(null)
+      setError('missing')
+      return
+    }
+
+    let stopped = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const currentJobId = jobId
+
+    async function poll() {
+      try {
+        const res = await fetch(`/api/image-generation/jobs/${encodeURIComponent(currentJobId)}`)
+        if (!res.ok) {
+          if (!stopped) setError(res.status === 404 ? 'not_found' : 'load_failed')
+          return
+        }
+        const nextJob = await res.json() as ImageGenerationJob
+        if (stopped) return
+        setJob(nextJob)
+        setError('')
+        if (!['success', 'error'].includes(nextJob.status)) {
+          timer = setTimeout(poll, 2000)
+        }
+      } catch {
+        if (!stopped) setError('load_failed')
+      }
+    }
+
+    setJob(null)
+    setError('')
+    void poll()
+    return () => {
+      stopped = true
+      if (timer) clearTimeout(timer)
+    }
+  }, [jobId])
+
+  if (!jobId) {
+    return <ImageToolStatusCard title="图片任务记录不可用" description="工具结果缺少 jobId，无法渲染 ImageJobCard。" />
+  }
+
+  if (error) {
+    return <ImageToolStatusCard title="图片任务加载失败" description={`jobId: ${jobId}`} />
+  }
+
+  if (!job) {
+    return <ImageToolStatusCard title="正在加载图片任务" description={`jobId: ${jobId}`} loading />
+  }
+
+  return (
+    <div className="mt-2 pl-5">
+      <ImageJobCard job={job} />
+    </div>
+  )
 }
 
 function normalizeAskUserQuestions(input: Record<string, unknown>): AskUserQuestionItem[] {
@@ -648,6 +858,8 @@ export function ToolUseBlock({
   const isDone = !!result
   const isError = result?.is_error
   const Icon = getToolIcon(name)
+  const imageToolResult = result && isImageGenerationToolCall(name) && !result.is_error
+  const imageJobId = imageToolResult ? extractImageJobId(result.content) : null
 
   if (name === 'AskUserQuestion') {
     return (
@@ -687,6 +899,7 @@ export function ToolUseBlock({
           <ChevronRight size={10} className={cn('shrink-0 ml-auto transition-transform', expanded && 'rotate-90')} style={{ color: 'var(--color-text-muted)' }} />
         )}
       </button>
+      {imageToolResult && <ImageToolResultView jobId={imageJobId} />}
       {expanded && result && (
         <div className="mt-1 pl-5">
           {toolFailed && (
@@ -982,11 +1195,13 @@ export function UserMessage({ blocks, fallbackContent, onPreviewFile }: {
           const ext = b.name.split('.').pop()?.toLowerCase() || ''
           const isPptLike = ['ppt', 'pptx', 'odp'].includes(ext)
           const canPreview = !!onPreviewFile && !isPptLike
-          const cfg = getChipConfig(b.name, b.mimeType.includes('pdf') ? 'pdf' : b.mimeType === 'video/mp4' ? 'video' : 'text')
+          const previewUrl = b.displayUrl || b.url
+          const previewMimeType = b.displayMimeType || b.mimeType
+          const cfg = getChipConfig(b.name, previewMimeType.includes('pdf') ? 'pdf' : previewMimeType === 'video/mp4' ? 'video' : 'text')
           return (
             <div
               key={`file-${i}`}
-              onClick={() => canPreview && onPreviewFile?.({ url: b.url, originalFilename: b.originalFilename, name: b.name, mimeType: b.mimeType })}
+              onClick={() => canPreview && onPreviewFile?.({ url: previewUrl, originalFilename: b.originalFilename, name: b.name, mimeType: previewMimeType })}
               style={{
                 display: 'flex', alignItems: 'center', gap: 10,
                 padding: '8px 12px', borderRadius: 10,
@@ -1097,11 +1312,15 @@ export function AssistantMessage({
 
   const toolResults = new Map<string, { content: string; is_error: boolean; elapsedSeconds: number }>()
   const toolProgressElapsed = new Map<string, number>()
+  const toolNamesById = new Map<string, string>()
   const taskToolUseIds = new Map<string, string>()
   const taskElapsedByToolUseId = new Map<string, number>()
   const toolFailures = new Set<string>()
   const bridgedAskQuestionToolIds = new Set<string>()
   for (const b of blocks) {
+    if (b.type === 'tool_use') {
+      toolNamesById.set(b.id, b.name)
+    }
     if (b.type === 'tool_result') {
       const resultElapsed = normalizePositiveSeconds((b as { elapsed_time_seconds?: unknown }).elapsed_time_seconds)
       toolResults.set(b.tool_use_id, { content: b.content, is_error: b.is_error, elapsedSeconds: resultElapsed })
@@ -1121,6 +1340,13 @@ export function AssistantMessage({
     }
     if (b.type === 'permission_request' && b.toolFailed && b.toolUseId) toolFailures.add(b.toolUseId)
     if (b.type === 'ask_user_question' && b.toolUseId) bridgedAskQuestionToolIds.add(b.toolUseId)
+  }
+  const generatedToolImageUrls = new Set<string>()
+  for (const b of blocks) {
+    if (b.type !== 'tool_result' || b.is_error) continue
+    const toolName = toolNamesById.get(b.tool_use_id) || ''
+    if (!isImageGenerationToolCall(toolName)) continue
+    for (const url of extractImageToolUrls(b.content)) generatedToolImageUrls.add(url)
   }
 
   const agentSubBlocksMap = new Map<string, AgentSubBlock[]>()
@@ -1144,9 +1370,11 @@ export function AssistantMessage({
       {blocks.map((block, i) => {
         switch (block.type) {
           case 'text':
+            const textContent = stripDuplicateGeneratedImages(block.text, generatedToolImageUrls)
+            if (!textContent) return null
             return (
               <div key={`text-${i}`} className="text-[13px] leading-relaxed select-text">
-                <MarkdownRenderer content={block.text} onPreviewFile={onPreviewFile} />
+                <MarkdownRenderer content={textContent} onPreviewFile={onPreviewFile} />
                 {streaming && i === lastTextOrThinkingIdx && !hasAnyText && <StreamingCursor />}
               </div>
             )

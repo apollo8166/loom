@@ -103,6 +103,7 @@ export async function executeTask(task: RawTask): Promise<{ status: 'ok' | 'erro
     const q = createLoomQuery({
       prompt: effectivePrompt,
       sessionId: runtimeSessionId,
+      loomSessionId: sessionId,
       model,
       bypassPermissions: true,
       resumeSession: false,

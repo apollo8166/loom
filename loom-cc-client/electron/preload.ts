@@ -25,8 +25,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Filesystem watcher
   watchDirectory: (dirPath: string) => ipcRenderer.invoke('fs:watch', dirPath),
-  onFsChanged: (callback: () => void) => {
-    const handler = () => callback()
+  unwatchDirectory: () => ipcRenderer.invoke('fs:unwatch'),
+  onFsChanged: (callback: (payload?: { dirPath?: string | null }) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload?: { dirPath?: string | null }) => callback(payload)
     ipcRenderer.on('fs:changed', handler)
     return () => ipcRenderer.removeListener('fs:changed', handler)
   },

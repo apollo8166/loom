@@ -59,10 +59,27 @@ type Attachment = {
   name: string
   filename: string
   originalFilename?: string
+  displayFilename?: string
+  displayMimeType?: string
+  readable?: boolean
+  extractError?: string
   mimeType: string
   tier: string
   isImage: boolean
   size: number
+}
+
+type RuntimeAttachmentPayload = {
+  name: string
+  filename: string
+  mimeType: string
+  tier: string
+  originalFilename?: string
+  displayFilename?: string
+  displayMimeType?: string
+  readable?: boolean
+  extractError?: string
+  placeholder?: string
 }
 
 type ProviderConfigBrief = {
@@ -225,9 +242,18 @@ function normalizeStoredModel(modelId: string | null | undefined, config?: Provi
 
 function attachmentPlaceholder(att: Attachment) {
   if (att.isImage) return `[Image #${att.num}]`
-  if (att.tier === 'pdf') return `[PDF #${att.num}]`
+  if (att.tier === 'text' && (att.displayMimeType === 'application/pdf' || att.name.toLowerCase().endsWith('.pdf'))) return `[PDF Text #${att.num}]`
+  if (att.tier === 'pdf' || att.displayMimeType === 'application/pdf' || att.name.toLowerCase().endsWith('.pdf')) return `[PDF #${att.num}]`
   if (att.mimeType === 'video/mp4' || att.name.toLowerCase().endsWith('.mp4')) return `[Video #${att.num}]`
   return `[File #${att.num}]`
+}
+
+function attachmentReadableLabel(att: Attachment): string {
+  if (att.isImage) return 'Image'
+  if (att.tier === 'text' && (att.displayMimeType === 'application/pdf' || att.name.toLowerCase().endsWith('.pdf'))) return 'PDF Text'
+  if (att.tier === 'pdf' || att.displayMimeType === 'application/pdf' || att.name.toLowerCase().endsWith('.pdf')) return att.readable === false ? 'PDF Unreadable' : 'PDF'
+  if (att.mimeType === 'video/mp4' || att.name.toLowerCase().endsWith('.mp4')) return 'Video'
+  return getChipConfig(att.name, att.tier).typeLabel
 }
 
 function filenameFromServedFileUrl(url: string): string {
@@ -426,7 +452,7 @@ interface WorkbenchViewProps {
     permissionMode?: string; thinkingMode?: string; planMode?: boolean
     agentName?: string
     enabledSkills?: string[]
-    attachments?: Array<{ name: string; filename: string; mimeType: string; tier: string; originalFilename?: string }>
+    attachments?: RuntimeAttachmentPayload[]
   } | null
   onPendingAutoSendConsumed?: () => void
   sessionDraft?: { workspacePath: string | null; attachedFolderPaths: string[]; useWorktree: boolean } | null
@@ -434,7 +460,7 @@ interface WorkbenchViewProps {
     message: string; permissionMode: string; thinkingMode: string; planMode: boolean
     effectiveMessage?: string
     enabledSkills?: string[]
-    attachments?: Array<{ name: string; filename: string; mimeType: string; tier: string; originalFilename?: string }>
+    attachments?: RuntimeAttachmentPayload[]
   }) => void
   onCreateImageSession?: () => Promise<Session | null>
   hideWorkspaceBar?: boolean
@@ -946,7 +972,13 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
           existingMsgCount: activeMessages.length,
           resumeSession: Boolean(session && activeMessages.length > 0),
           attachmentCount: attachments.length,
-          attachments: attachments.map(a => ({ name: a.name, size: a.size, tier: a.tier, mimeType: a.mimeType })),
+          attachments: attachments.map(a => ({
+            name: a.name,
+            size: a.size,
+            tier: a.tier,
+            mimeType: a.mimeType,
+            displayMimeType: a.displayMimeType,
+          })),
         }),
       })
       const data = await res.json()
@@ -1050,8 +1082,9 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
       const isImage = file.type.startsWith('image/')
       const ext = file.name.split('.').pop()?.toLowerCase() || ''
       const isVideo = file.type === 'video/mp4' || ext === 'mp4'
-      const mimeType = isVideo ? 'video/mp4' : file.type
-      const tier = isImage ? 'image' : file.type === 'application/pdf' ? 'pdf' : isVideo ? 'binary' : 'text'
+      const isPdf = file.type === 'application/pdf' || ext === 'pdf'
+      const fallbackMimeType = isVideo ? 'video/mp4' : isPdf ? 'application/pdf' : file.type
+      const fallbackTier = isImage ? 'image' : isPdf ? 'pdf' : isVideo ? 'binary' : 'text'
       const formData = new FormData()
       formData.append('file', file)
       const xhr = new XMLHttpRequest()
@@ -1063,15 +1096,38 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
       xhr.addEventListener('load', () => {
         if (xhr.status >= 200 && xhr.status < 300) {
           try {
-            const data = JSON.parse(xhr.responseText)
+            const data = JSON.parse(xhr.responseText) as {
+              filename: string
+              originalFilename?: string
+              displayFilename?: string
+              displayMimeType?: string
+              readable?: boolean
+              extractError?: string
+              message?: string
+              mimeType?: string
+              tier?: string
+              isImage?: boolean
+              size?: number
+            }
+            const resolvedMimeType = data.mimeType || fallbackMimeType || 'application/octet-stream'
+            const resolvedTier = data.tier || fallbackTier
+            const resolvedIsImage = data.isImage ?? isImage
             const newAtt: Attachment = {
               num, name: file.name, filename: data.filename,
               originalFilename: data.originalFilename,
-              mimeType, tier, isImage, size: file.size,
+              displayFilename: data.displayFilename,
+              displayMimeType: data.displayMimeType,
+              readable: data.readable,
+              extractError: data.extractError,
+              mimeType: resolvedMimeType, tier: resolvedTier, isImage: resolvedIsImage, size: data.size ?? file.size,
             }
             setAttachments(prev => [...prev, newAtt])
-            const placeholder = isImage ? `[Image #${num}]` : tier === 'pdf' ? `[PDF #${num}]` : isVideo ? `[Video #${num}]` : `[File #${num}]`
-            setInput(prev => { const sep = prev && !prev.endsWith(' ') ? ' ' : ''; return prev + sep + placeholder })
+            if (data.readable === false) {
+              showNotification(data.message || `${file.name} 未能提取可读文字，当前不能作为聊天上下文发送。`)
+            } else {
+              const placeholder = attachmentPlaceholder(newAtt)
+              setInput(prev => { const sep = prev && !prev.endsWith(' ') ? ' ' : ''; return prev + sep + placeholder })
+            }
           } catch { /* ignore */ }
         } else {
           let msg = `文件上传失败：${file.name}`
@@ -1140,27 +1196,69 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
     return window.electronAPI.onCaptureError(() => showNotification('截图失败，请检查屏幕录制权限'))
   }, [showNotification])
 
-  // Drag and drop
-  const handleDragEnter = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    dragCounterRef.current++
-    if (Array.from(e.dataTransfer.types).includes('Files')) setIsDragging(true)
+  const isFileDragEvent = useCallback((e: React.DragEvent) => {
+    return Array.from(e.dataTransfer.types || []).includes('Files')
   }, [])
-  const handleDragLeave = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    dragCounterRef.current--
-    if (dragCounterRef.current === 0) setIsDragging(false)
-  }, [])
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    e.dataTransfer.dropEffect = 'copy'
-  }, [])
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
+
+  const resetDragState = useCallback(() => {
     dragCounterRef.current = 0
     setIsDragging(false)
-    if (e.dataTransfer.files.length > 0) handleFileUpload(e.dataTransfer.files)
-  }, [handleFileUpload])
+  }, [])
+
+  const handleDroppedFiles = useCallback((files: FileList) => {
+    if (files.length === 0) return
+    if (!canCompose) {
+      showNotification('请先创建会话')
+      return
+    }
+    if (missingWorkspace) {
+      showNotification('请先选择工作目录')
+      return
+    }
+    handleFileUpload(files)
+    textareaRef.current?.focus()
+  }, [canCompose, handleFileUpload, missingWorkspace, showNotification])
+
+  // Drag and drop
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    if (!isFileDragEvent(e)) return
+    e.preventDefault()
+    dragCounterRef.current++
+    setIsDragging(true)
+  }, [isFileDragEvent])
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    if (!isFileDragEvent(e)) return
+    e.preventDefault()
+    dragCounterRef.current = Math.max(0, dragCounterRef.current - 1)
+    if (dragCounterRef.current === 0) setIsDragging(false)
+  }, [isFileDragEvent])
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    if (!isFileDragEvent(e)) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = canCompose && !missingWorkspace ? 'copy' : 'none'
+  }, [canCompose, isFileDragEvent, missingWorkspace])
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    if (!isFileDragEvent(e)) return
+    e.preventDefault()
+    resetDragState()
+    handleDroppedFiles(e.dataTransfer.files)
+  }, [handleDroppedFiles, isFileDragEvent, resetDragState])
+
+  const handleComposerDragOver = useCallback((e: React.DragEvent) => {
+    if (!isFileDragEvent(e)) return
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragging(true)
+    e.dataTransfer.dropEffect = canCompose && !missingWorkspace ? 'copy' : 'none'
+  }, [canCompose, isFileDragEvent, missingWorkspace])
+
+  const handleComposerDrop = useCallback((e: React.DragEvent) => {
+    if (!isFileDragEvent(e)) return
+    e.preventDefault()
+    e.stopPropagation()
+    resetDragState()
+    handleDroppedFiles(e.dataTransfer.files)
+  }, [handleDroppedFiles, isFileDragEvent, resetDragState])
 
   // Export
   const handleExport = useCallback(() => {
@@ -1513,7 +1611,7 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
 
     let orderedAttachments = [...attachments]
     if (attachments.length > 1) {
-      const regex = /\[(?:Image|PDF|File) #(\d+)\]/g
+      const regex = /\[(?:Image|PDF Text|PDF|Video|File) #(\d+)\]/g
       const seen = new Set<number>(); const reordered: Attachment[] = []; let match: RegExpExecArray | null
       while ((match = regex.exec(input)) !== null) {
         const num = parseInt(match[1])
@@ -1523,8 +1621,25 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
       if (reordered.length === attachments.length) orderedAttachments = reordered
     }
 
+    const unreadablePdf = orderedAttachments.find(a => a.readable === false && a.tier === 'pdf')
+    if (unreadablePdf) {
+      showNotification(`${unreadablePdf.name} 当前无法提取可读文字，请换成可复制文字的 PDF，或先转成 txt/docx 后再发送。`)
+      return
+    }
+
     const attachmentData = orderedAttachments.length > 0
-      ? orderedAttachments.map(a => ({ name: a.name, filename: a.filename, originalFilename: a.originalFilename, mimeType: a.mimeType, tier: a.tier }))
+      ? orderedAttachments.map(a => ({
+          name: a.name,
+          filename: a.filename,
+          originalFilename: a.originalFilename,
+          displayFilename: a.displayFilename,
+          displayMimeType: a.displayMimeType,
+          readable: a.readable,
+          extractError: a.extractError,
+          placeholder: getPlaceholder(a),
+          mimeType: a.mimeType,
+          tier: a.tier,
+        }))
       : undefined
     let content = input
     if (orderedAttachments.length > 0 && !content.trim()) {
@@ -1584,7 +1699,11 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
         })
       return
     }
-    const riskyAttachments = orderedAttachments.filter(a => a.size >= LARGE_ATTACHMENT_WARN_BYTES || a.tier === 'pdf')
+
+    const riskyAttachments = orderedAttachments.filter(a =>
+      a.size >= LARGE_ATTACHMENT_WARN_BYTES ||
+      a.tier === 'pdf'
+    )
     const riskyAttachmentSignature = riskyAttachments.map(a => `${a.filename}:${a.size}:${a.tier}`).join('|')
     if (riskyAttachments.length > 0 && attachmentOverrideSignature !== riskyAttachmentSignature) {
       setAttachmentOverrideSignature(riskyAttachmentSignature)
@@ -2478,18 +2597,25 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
               const cfg = a.isImage ? null : getChipConfig(a.name, a.tier)
               const placeholder = getPlaceholder(a)
               const serveUrl = `/api/files/serve/${a.filename}`
-              const ext = (a.name.split('.').pop()?.toLowerCase() || '')
+              const previewFilename = a.displayFilename || a.originalFilename || a.filename
+              const previewUrl = `/api/files/serve/${previewFilename}`
+              const previewName = a.name
+              const previewMimeType = a.displayMimeType || a.mimeType
+              const ext = (previewName.split('.').pop()?.toLowerCase() || '')
               const isPptLike = ['ppt', 'pptx', 'odp'].includes(ext)
               const isPreviewable = !isPptLike
+              const readableLabel = attachmentReadableLabel(a)
               return (
                 <div
                   key={i}
                   className="group/att"
-                  style={{ position: 'relative', borderRadius: 5, padding: 6, maxWidth: 216, background: 'var(--theme-bg-raised)', border: '1px solid var(--theme-border)', cursor: 'pointer', flexShrink: 0 }}
+                  style={{ position: 'relative', borderRadius: 5, padding: 6, maxWidth: 216, background: 'var(--theme-bg-raised)', border: a.readable === false ? '1px solid #ef4444' : '1px solid var(--theme-border)', cursor: 'pointer', flexShrink: 0 }}
                   title={isPreviewable ? '点击预览' : `点击插入 ${placeholder}`}
                   onClick={() => isPreviewable
-                    ? setPreviewFile({ url: serveUrl, originalFilename: a.originalFilename, name: a.name, mimeType: a.mimeType })
-                    : insertPlaceholder(placeholder)
+                    ? setPreviewFile({ url: previewUrl, originalFilename: a.originalFilename, name: previewName, mimeType: previewMimeType })
+                    : a.readable === false
+                      ? showNotification(`${a.name} 当前无法作为聊天上下文读取。`)
+                      : insertPlaceholder(placeholder)
                   }
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -2509,7 +2635,7 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
                     )}
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <p style={{ fontSize: 11, fontWeight: 500, color: 'var(--color-text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</p>
-                      <p style={{ fontSize: 10, color: 'var(--color-text-muted)' }}>{a.isImage ? 'Image' : cfg!.typeLabel}{a.size ? ` · ${formatFileSize(a.size)}` : ''}</p>
+                      <p style={{ fontSize: 10, color: a.readable === false ? '#ef4444' : 'var(--color-text-muted)' }}>{readableLabel}{a.size ? ` · ${formatFileSize(a.size)}` : ''}</p>
                       <p style={{ fontSize: 9, color: 'var(--color-text-disabled)', fontFamily: 'monospace' }}>{placeholder}</p>
                     </div>
                   </div>
@@ -2814,6 +2940,8 @@ export function WorkbenchView({ project, session, onNewSession, projectName, onP
           {/* ── Input box ── */}
           <div
             className={cn('rounded-xl transition-colors', isDragging && 'border-amber-500/50')}
+            onDragOver={handleComposerDragOver}
+            onDrop={handleComposerDrop}
             style={{
               background: 'var(--theme-bg-raised)',
               border: `1px solid ${isDragging ? 'rgba(245,158,11,0.5)' : 'var(--shell-panel-border)'}`,

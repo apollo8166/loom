@@ -132,13 +132,13 @@ Loom 未来会支持更完整的插件系统。插件可以内置或扩展运行
 
 1. 打开 [Releases](https://github.com/apollo8166/loom/releases/latest)。
 2. 根据设备下载对应安装包：
-   - `loom-cc-v0.2.0-mac-arm64.dmg`：Apple Silicon / M 系列 Mac。
-   - `loom-cc-v0.2.0-mac-x64.dmg`：Intel Mac。
+   - `loom-cc-v0.2.2-mac-arm64.dmg`：Apple Silicon / M 系列 Mac。
+   - `loom-cc-v0.2.2-mac-x64.dmg`：Intel Mac。
 3. 安装并打开 Loom。
 4. 在设置中配置模型服务商。
 5. 新建全局 Chat 或选择项目工作目录。
 
-> 当前 macOS 构建包尚未完成 Developer ID 签名和 notarize，首次打开时可能需要在系统安全设置中手动允许。
+> 当前 macOS 构建包已完成 Developer ID 签名、notarize、staple，并在发布前通过 Gatekeeper 验证。
 
 ### 路径 B：从源码运行
 
@@ -491,11 +491,11 @@ Loom 不只想成为一个工具，也希望成为用户理解 AI Agent 的学�
 
 ## 版本
 
-当前开源基线版本：`v0.2.0`。
+当前开源基线版本：`v0.2.2`。
 
-版本说明：[docs/releases/v0.2.0.md](docs/releases/v0.2.0.md)。
+版本说明：[docs/releases/v0.2.2.md](docs/releases/v0.2.2.md)。
 
-v0.2.0 增加 Chat 图像生成、可配置的 GPT-Image2 / Nano Banana 2 / SeeDream 图像 provider、项目 Subagents / Skills / MCP 资源管理、定时任务执行增强、飞书 / Lark 通道基础能力、MP4 / 本地文件预览增强、模型与上下文窗口配置增强，并修复多项 Chat 与项目创建问题。
+v0.2.2 强化了附件处理，尤其是 PDF：能提取可读文字时就直接注入上下文，无法读取时会在发送前明确拦截，避免把上传附件当成工作区文件继续处理。
 
 ---
 

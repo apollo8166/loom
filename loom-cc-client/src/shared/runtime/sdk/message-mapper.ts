@@ -91,6 +91,45 @@ export class MessageMapper {
     blocks.push(block)
   }
 
+  private upsertToolResultBlock(toolUseId: string, content: string, isError: boolean): void {
+    const nextBlock = { type: 'tool_result', tool_use_id: toolUseId, content, is_error: isError }
+    const index = this.allBlocks.findIndex(b => b.type === 'tool_result' && b.tool_use_id === toolUseId)
+    if (index >= 0) {
+      this.allBlocks[index] = nextBlock
+    } else {
+      this.allBlocks.push(nextBlock)
+    }
+  }
+
+  private addSummaryToolResultBlock(toolUseId: string, content: string, isError: boolean): boolean {
+    if (this.allBlocks.some(b => b.type === 'tool_result' && b.tool_use_id === toolUseId)) return false
+    this.allBlocks.push({ type: 'tool_result', tool_use_id: toolUseId, content, is_error: isError })
+    return true
+  }
+
+  private toolResultContentToText(content: unknown): string {
+    if (typeof content === 'string') return content
+    if (Array.isArray(content)) {
+      const texts = content
+        .filter((item): item is { type: string; text: string } => (
+          typeof item === 'object' &&
+          item !== null &&
+          (item as { type?: unknown }).type === 'text' &&
+          typeof (item as { text?: unknown }).text === 'string'
+        ))
+        .map(item => item.text)
+      if (texts.length > 0) return texts.join('\n')
+    }
+    return JSON.stringify(content) || ''
+  }
+
+  private isImageGenerationToolName(toolName: string): boolean {
+    const normalized = toolName.toLowerCase()
+    return normalized === 'generate_image' ||
+      normalized === 'mcp__loom_image__generate_image' ||
+      (normalized.includes('loom_image') && normalized.includes('generate_image'))
+  }
+
   private mapAgentStreamEvent(parentId: string, msg: Extract<SDKMessage, { type: 'stream_event' }>): SseEvent[] {
     const event = msg.event
     const state = this.getOrCreateAgentState(parentId)
@@ -185,7 +224,7 @@ export class MessageMapper {
         if (typeof block !== 'object' || block === null || !('type' in block)) continue
         if (block.type === 'tool_result') {
           const toolResult = block as { type: 'tool_result'; tool_use_id: string; content?: unknown; is_error?: boolean }
-          const content = typeof toolResult.content === 'string' ? toolResult.content : JSON.stringify(toolResult.content) || ''
+          const content = this.toolResultContentToText(toolResult.content)
           const truncatedContent = content.length > 3000 ? content.slice(0, 3000) + ' [truncated]' : content
           const isMainThreadTool = this.allBlocks.some(b => b.type === 'tool_use' && b.id === toolResult.tool_use_id)
           if (isMainThreadTool) {
@@ -207,15 +246,11 @@ export class MessageMapper {
                 }
               }
               const fullText = textParts.join('\n') || content
-              if (!this.allBlocks.some(b => b.type === 'tool_result' && b.tool_use_id === toolResult.tool_use_id)) {
-                this.allBlocks.push({ type: 'tool_result', tool_use_id: toolResult.tool_use_id, content: fullText, is_error: !!toolResult.is_error })
-                events.push({ type: 'tool_result', tool_use_id: toolResult.tool_use_id, name: toolName, result: fullText, is_error: !!toolResult.is_error })
-              }
+              this.upsertToolResultBlock(toolResult.tool_use_id, fullText, !!toolResult.is_error)
+              events.push({ type: 'tool_result', tool_use_id: toolResult.tool_use_id, name: toolName, result: fullText, is_error: !!toolResult.is_error })
             } else {
-              if (!this.allBlocks.some(b => b.type === 'tool_result' && b.tool_use_id === toolResult.tool_use_id)) {
-                this.allBlocks.push({ type: 'tool_result', tool_use_id: toolResult.tool_use_id, content: truncatedContent, is_error: !!toolResult.is_error })
-                events.push({ type: 'tool_result', tool_use_id: toolResult.tool_use_id, name: toolName || 'unknown', result: truncatedContent.length > 2000 ? truncatedContent.slice(0, 2000) + ' [truncated]' : truncatedContent, is_error: !!toolResult.is_error })
-              }
+              this.upsertToolResultBlock(toolResult.tool_use_id, truncatedContent, !!toolResult.is_error)
+              events.push({ type: 'tool_result', tool_use_id: toolResult.tool_use_id, name: toolName || 'unknown', result: truncatedContent.length > 2000 ? truncatedContent.slice(0, 2000) + ' [truncated]' : truncatedContent, is_error: !!toolResult.is_error })
             }
             continue
           }
@@ -292,18 +327,21 @@ export class MessageMapper {
 
   private mapToolUseSummary(msg: Extract<SDKMessage, { type: 'tool_use_summary' }>): SseEvent[] {
     const toolUseIds = msg.preceding_tool_use_ids
+    const events: SseEvent[] = []
     for (const toolUseId of toolUseIds) {
-      if (!this.allBlocks.some(b => b.type === 'tool_result' && b.tool_use_id === toolUseId)) {
-        this.allBlocks.push({ type: 'tool_result', tool_use_id: toolUseId, content: msg.summary, is_error: this.erroredToolUseIds.has(toolUseId) })
-      }
+      const toolName = this.toolIdToName.get(toolUseId) || ''
+      if (this.isImageGenerationToolName(toolName)) continue
+      const isError = this.erroredToolUseIds.has(toolUseId)
+      if (!this.addSummaryToolResultBlock(toolUseId, msg.summary, isError)) continue
+      events.push({
+        type: 'tool_result',
+        tool_use_id: toolUseId,
+        name: toolName,
+        result: msg.summary.length > 2000 ? msg.summary.slice(0, 2000) + ' [truncated]' : msg.summary,
+        is_error: isError,
+      })
     }
-    return toolUseIds.map(toolUseId => ({
-      type: 'tool_result',
-      tool_use_id: toolUseId,
-      name: '',
-      result: msg.summary.length > 2000 ? msg.summary.slice(0, 2000) + ' [truncated]' : msg.summary,
-      is_error: this.erroredToolUseIds.has(toolUseId),
-    }))
+    return events
   }
 
   private mapToolProgress(msg: Extract<SDKMessage, { type: 'tool_progress' }>): SseEvent[] {
@@ -380,16 +418,12 @@ export class MessageMapper {
               }
             }
             const fullText = textParts.join('\n') || JSON.stringify(toolResult.content) || ''
-            this.allBlocks.push({ type: 'tool_result', tool_use_id: toolResult.tool_use_id, content: fullText, is_error: !!toolResult.is_error })
+            this.upsertToolResultBlock(toolResult.tool_use_id, fullText, !!toolResult.is_error)
             events.push({ type: 'tool_result', tool_use_id: toolResult.tool_use_id, name: toolName, result: fullText, is_error: !!toolResult.is_error })
           } else {
-            const contentStr = typeof toolResult.content === 'string'
-              ? toolResult.content
-              : JSON.stringify(toolResult.content)
+            const contentStr = this.toolResultContentToText(toolResult.content)
             const truncated = (contentStr?.length ?? 0) > 3000 ? contentStr!.slice(0, 3000) + ' [truncated]' : (contentStr || '')
-            if (!this.allBlocks.some(b => b.type === 'tool_result' && b.tool_use_id === toolResult.tool_use_id)) {
-              this.allBlocks.push({ type: 'tool_result', tool_use_id: toolResult.tool_use_id, content: truncated, is_error: !!toolResult.is_error })
-            }
+            this.upsertToolResultBlock(toolResult.tool_use_id, truncated, !!toolResult.is_error)
             events.push({
               type: 'tool_result',
               tool_use_id: toolResult.tool_use_id,

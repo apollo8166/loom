@@ -16,6 +16,34 @@ function getLastSegment(p: string) {
   return p.replace(/[/\\]$/, '').split(/[/\\]/).pop() || ''
 }
 
+function getFolderNameError(name: string): string | null {
+  const value = name.trim()
+  if (!value) return null
+  if (/[<>:"/\\|?*\x00-\x1F]/.test(value)) {
+    return '项目名称会作为文件夹名，不能包含 <>:"/\\|?*'
+  }
+  if (/^\.+$/.test(value)) {
+    return '项目名称不能只包含点'
+  }
+  return null
+}
+
+function trimTrailingSeparators(value: string): string {
+  const trimmed = value.trim()
+  if (/^[A-Za-z]:[\\/]?$/.test(trimmed)) return trimmed.replace(/[\\/]$/, '')
+  if (/^[/\\]+$/.test(trimmed)) return trimmed[0]
+  return trimmed.replace(/[\\/]+$/, '')
+}
+
+function joinDirectory(base: string, child: string): string {
+  const parent = trimTrailingSeparators(base)
+  const segment = child.trim()
+  const sep = parent.includes('\\') ? '\\' : '/'
+  if (!parent) return segment
+  if (parent === '/' || parent === '\\') return `${parent}${segment}`
+  return `${parent}${sep}${segment}`
+}
+
 export function ProjectCreateDialog({ open, onClose, onCreate }: ProjectCreateDialogProps) {
   const [step, setStep] = useState<Step>('choose')
   const [name, setName] = useState('')
@@ -51,14 +79,20 @@ export function ProjectCreateDialog({ open, onClose, onCreate }: ProjectCreateDi
 
   const handleCreate = useCallback(async () => {
     if (!name.trim() || creating) return
+    const folderNameError = step === 'scratch' ? getFolderNameError(name) : null
+    if (folderNameError) return
+    const finalWorkspacePath = step === 'scratch'
+      ? (workspacePath.trim() ? joinDirectory(workspacePath, name.trim()) : '')
+      : workspacePath.trim()
+    if ((step === 'scratch' || step === 'existing') && !finalWorkspacePath) return
     setCreating(true)
     try {
-      await onCreate(name.trim(), workspacePath.trim(), instructions.trim(), defaultModel)
+      await onCreate(name.trim(), finalWorkspacePath, instructions.trim(), defaultModel)
       reset()
     } finally {
       setCreating(false)
     }
-  }, [name, workspacePath, instructions, defaultModel, creating, onCreate])
+  }, [step, name, workspacePath, instructions, defaultModel, creating, onCreate])
 
   const handleNameChange = useCallback((value: string) => {
     setName(value)
@@ -66,18 +100,22 @@ export function ProjectCreateDialog({ open, onClose, onCreate }: ProjectCreateDi
   }, [])
 
   /* Pick folder (used in both existing step and scratch location picker) */
-  const handleBrowseFolder = useCallback(async () => {
+  const handleBrowseFolder = useCallback(async (mode: 'scratch' | 'existing') => {
     const dir = await window.electronAPI?.openDirectoryDialog()
     if (!dir) return
     setWorkspacePath(dir)
-    const seg = getLastSegment(dir)
-    if (seg && (!name.trim() || !nameManuallyEdited)) {
-      setName(seg)
-      setTimeout(() => {
-        nameRef.current?.select()
-        nameRef.current?.focus()
-      }, 50)
+    if (mode === 'existing') {
+      const seg = getLastSegment(dir)
+      if (seg && (!name.trim() || !nameManuallyEdited)) {
+        setName(seg)
+        setTimeout(() => {
+          nameRef.current?.select()
+          nameRef.current?.focus()
+        }, 50)
+      }
+      return
     }
+    if (!name.trim()) setTimeout(() => nameRef.current?.focus(), 50)
   }, [name, nameManuallyEdited])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
@@ -97,8 +135,16 @@ export function ProjectCreateDialog({ open, onClose, onCreate }: ProjectCreateDi
   if (!open) return null
 
   /* ── shared form (scratch + existing share the lower fields) ── */
-  const renderForm = (titleText: string, showFolderAtTop: boolean) => (
-    <div>
+  const renderForm = (titleText: string, showFolderAtTop: boolean) => {
+    const folderNameError = !showFolderAtTop ? getFolderNameError(name) : null
+    const scratchWorkspacePath = !showFolderAtTop && workspacePath.trim() && name.trim() && !folderNameError
+      ? joinDirectory(workspacePath, name.trim())
+      : ''
+    const canCreate = showFolderAtTop
+      ? Boolean(name.trim() && workspacePath.trim())
+      : Boolean(name.trim() && workspacePath.trim() && !folderNameError)
+
+    return <div>
       <button onClick={() => setStep('choose')} style={styles.backBtn}>
         <ArrowLeft size={15} /> 返回
       </button>
@@ -108,7 +154,7 @@ export function ProjectCreateDialog({ open, onClose, onCreate }: ProjectCreateDi
       {showFolderAtTop && (
         <div style={{ marginBottom: 18 }}>
           <label style={styles.label}>选择文件夹</label>
-          <FolderPickerBtn path={workspacePath} onBrowse={handleBrowseFolder} />
+          <FolderPickerBtn path={workspacePath} onBrowse={() => handleBrowseFolder('existing')} />
         </div>
       )}
 
@@ -130,6 +176,9 @@ export function ProjectCreateDialog({ open, onClose, onCreate }: ProjectCreateDi
             onFocus={e => { e.currentTarget.style.borderColor = '#6366F1' }}
             onBlur={e => { e.currentTarget.style.borderColor = 'var(--color-border-strong)' }}
           />
+          {folderNameError && (
+            <div style={styles.fieldError}>{folderNameError}</div>
+          )}
         </div>
       )}
 
@@ -169,8 +218,15 @@ export function ProjectCreateDialog({ open, onClose, onCreate }: ProjectCreateDi
       {/* Location picker — bottom for "scratch" */}
       {!showFolderAtTop && (
         <div style={{ marginBottom: 24 }}>
-          <label style={styles.label}>选择项目位置</label>
-          <FolderPickerBtn path={workspacePath} onBrowse={handleBrowseFolder} />
+          <label style={styles.label}>选择父目录</label>
+          <FolderPickerBtn path={workspacePath} onBrowse={() => handleBrowseFolder('scratch')} />
+          {workspacePath && (
+            <div style={styles.pathHint}>
+              {scratchWorkspacePath
+                ? <>将创建项目目录：<span style={styles.pathCode}>{scratchWorkspacePath}</span></>
+                : '填写项目名称后，Loom 会在该父目录下创建同名文件夹。'}
+            </div>
+          )}
         </div>
       )}
 
@@ -179,18 +235,18 @@ export function ProjectCreateDialog({ open, onClose, onCreate }: ProjectCreateDi
         <button onClick={handleClose} style={styles.cancelBtn}>取消</button>
         <button
           onClick={handleCreate}
-          disabled={!name.trim() || creating}
+          disabled={!canCreate || creating}
           style={{
             ...styles.createBtn,
-            opacity: name.trim() && !creating ? 1 : 0.45,
-            cursor: name.trim() && !creating ? 'pointer' : 'not-allowed',
+            opacity: canCreate && !creating ? 1 : 0.45,
+            cursor: canCreate && !creating ? 'pointer' : 'not-allowed',
           }}
         >
           {creating ? '创建中…' : '创建'}
         </button>
       </div>
     </div>
-  )
+  }
 
   return createPortal(
     <div
@@ -241,14 +297,14 @@ export function ProjectCreateDialog({ open, onClose, onCreate }: ProjectCreateDi
             </button>
             <h2 style={styles.title}>使用现有文件夹</h2>
             <p style={{ fontSize: 13, lineHeight: 1.65, color: 'var(--color-text-muted)', marginBottom: 22 }}>
-              选择一个文件夹，Loom 将把其中的文件作为项目上下文。<br />
+              选择一个已有文件夹，Loom 将直接把这个目录作为项目工作目录。<br />
               您也可以添加说明来指导工作方式。
             </p>
 
             {/* Folder picker */}
             <div style={{ marginBottom: workspacePath ? 18 : 28 }}>
               <label style={styles.label}>选择文件夹</label>
-              <FolderPickerBtn path={workspacePath} onBrowse={handleBrowseFolder} />
+              <FolderPickerBtn path={workspacePath} onBrowse={() => handleBrowseFolder('existing')} />
             </div>
 
             {/* Fields appear after folder is picked */}
@@ -397,6 +453,24 @@ const styles = {
     width: '100%', padding: '10px 14px', borderRadius: 8, fontSize: 14,
     background: 'var(--color-bg-input)', color: 'var(--color-text-primary)',
     border: '1.5px solid var(--color-border-strong)', transition: 'border-color 0.15s',
+  } as React.CSSProperties,
+  fieldError: {
+    marginTop: 8,
+    fontSize: 12,
+    lineHeight: 1.5,
+    color: '#ef4444',
+  } as React.CSSProperties,
+  pathHint: {
+    marginTop: 10,
+    fontSize: 12,
+    lineHeight: 1.55,
+    color: 'var(--color-text-muted)',
+  } as React.CSSProperties,
+  pathCode: {
+    marginLeft: 6,
+    fontFamily: 'ui-monospace, monospace',
+    color: 'var(--color-text-primary)',
+    wordBreak: 'break-all',
   } as React.CSSProperties,
   backBtn: {
     display: 'flex', alignItems: 'center', gap: 6, marginBottom: 20,

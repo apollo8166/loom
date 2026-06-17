@@ -112,18 +112,19 @@ function safeFullPath(workspacePath: string, relPath: string): string | null {
 
 /* ── GET /api/projects/[id]/files ── */
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params
   const workspacePath = await resolveWorkspace(id)
+  const forceRefresh = req.nextUrl.searchParams.get('refresh') === '1'
 
   if (!workspacePath) return NextResponse.json({ error: 'Project not found' }, { status: 404 })
   if (!fs.existsSync(workspacePath)) return NextResponse.json({ files: [], branch: null })
 
   const cacheKey = path.resolve(workspacePath)
   const cached = treeCache.get(cacheKey)
-  if (cached && cached.expiresAt > Date.now()) {
+  if (!forceRefresh && cached && cached.expiresAt > Date.now()) {
     return NextResponse.json(
       { files: cached.files, branch: cached.branch },
       { headers: { 'Cache-Control': 'private, max-age=8' } },
@@ -139,7 +140,7 @@ export async function GET(
 
   return NextResponse.json(
     { files, branch },
-    { headers: { 'Cache-Control': 'private, max-age=8' } },
+    { headers: { 'Cache-Control': forceRefresh ? 'no-store' : 'private, max-age=8' } },
   )
 }
 

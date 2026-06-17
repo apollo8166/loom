@@ -187,7 +187,7 @@ export type ContentBlock =
   | { type: 'permission_request'; requestId: string; toolName: string; toolInput: Record<string, unknown>; status: PermissionStatus; toolUseId?: string; toolFailed?: boolean }
   | { type: 'ask_user_question'; requestId: string; questions: AskUserQuestionItem[]; status: AskUserQuestionStatus; toolUseId?: string; answers?: AskUserQuestionAnswers; annotations?: AskUserQuestionAnnotations }
   | { type: 'image_attachment'; url: string; name: string }
-  | { type: 'file_attachment'; url: string; name: string; size: number; mimeType: string; originalFilename?: string }
+  | { type: 'file_attachment'; url: string; name: string; size: number; mimeType: string; originalFilename?: string; displayUrl?: string; displayMimeType?: string }
   | { type: 'task_event'; event: string; task_id: string; payload: Record<string, unknown>; created_at: number }
 
 export interface Message {
